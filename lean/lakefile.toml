@@ -1,0 +1,6 @@
+name = "lab-attrib-lean"
+version = "0.1.0"
+defaultTargets = ["LabAttribLean"]
+
+[[lean_lib]]
+name = "LabAttribLean"
