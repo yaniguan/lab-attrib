@@ -1,0 +1,145 @@
+\documentclass[10pt,letterpaper]{article}
+\usepackage{labattrib_preprint}
+
+\begin{document}
+
+% ============================================================================
+% PAGE 1: FOCUSED SINGLE-TOPIC MONOGRAPH BANNER, ABSTRACT & SCM DIAGRAM
+% ============================================================================
+\makelabattribtitle
+  {Proof-Carrying Negative Results: A Lean 4 Causal Blame Calculus and Precursor-Identifiability Guard for Self-Driving Laboratories}
+  {Separating Robotic Execution Artifacts and Unreacted Precursor Ghost Peaks from Certified Scientific Truth Across Closed-Loop Active Learning and Annular Frontier Calibration}
+  {Yani Guan}
+  {Auto-Lab Open Research Initiative}
+  {\textcolor{accentdeep}{\textbf{Repo:}} \href{https://github.com/yaniguan/lab-attrib}{\texttt{github.com/yaniguan/lab-attrib}} \;\;$\cdot$\;\; \textcolor{accentdeep}{\textbf{Hub:}} \href{https://yaniguan.github.io/auto-lab/}{\texttt{yaniguan.github.io/auto-lab}} \;\;$\cdot$\;\; \textcolor{accentdeep}{\textbf{Kernel:}} \texttt{LabAttribLean (Lean 4.36.0)}}
+
+\begin{tcolorbox}[
+  enhanced,
+  colback=softbg,
+  colframe=linegray,
+  borderline west={3pt}{0pt}{accent},
+  arc=3.5pt,
+  boxrule=0.55pt,
+  left=10pt, right=10pt, top=6pt, bottom=6pt
+]
+{\footnotesize\sffamily\bfseries\textcolor{accentdeep}{ABSTRACT}}\par\vspace{2pt}
+{\footnotesize\color{ink}%
+Self-driving laboratories (SDLs) close the loop between machine-learning surrogates and robotic execution, yet existing formal verification frameworks terminate at \emph{pre-execution} collision and volume checks. Once a wet-lab protocol executes, raw analytical readouts confound three distinct causal processes: (i) latent biochemical or crystallographic truth $Z \in \{0,1\}$, (ii) physical execution and control cleanliness $E \in \{0,1\}$ (pipetting cavitation, missed incubation handoffs, seal evaporation, blank carry-over), and (iii) spectral identifiability $I \in \{0,1\}$ (Rietveld residual $R_{\mathrm{wp}}$ and unreacted starting-precursor peak overlap). Conflating $(E=0)$ with $(Z=0)$ poisons surrogate posteriors with false negative constraints, while conflating $(I=0)$ with $(Z=1)$ produces precursor ``ghost-phase'' false discoveries, as highlighted in recent autonomous solid-state synthesis debates. We introduce \textbf{\texttt{lab-attrib}}, the 15th core repository of Auto-Lab, pairing a machine-checked \textbf{Lean~4.36.0 Causal Blame Calculus} (\texttt{LabAttribLean}, $\ge 18$ theorems, \texttt{0 sorry}) with non-negative least-squares (NNLS) precursor peak deconvolution, Expected Value of Information (EVOI) orthogonal-assay routing, a SHA-256 hash-chained \emph{Proof-Carrying Negative Result Ledger}, and attributed annular \texttt{Chem-RRT} stepping-stone calibration. Across multi-phase diffraction suites and 6-round Delaney ESOL active-learning campaigns, \texttt{lab-attrib} drives false discovery rate from \texttt{66.7\% / 8.3\% $\to$ 0.0\%}, blocks $100\%$ of corrupted memory write-backs, lowers surrogate MAE by \textbf{22.0\%}, and unlocks \textbf{45$\times$} more multi-ring scaffolds than static trust walls while preserving nominal $90\%$ conformal coverage.}
+
+\vspace{4pt}
+{\color{linegray}\hrule height 0.5pt}
+\vspace{4pt}
+\noindent
+\begin{tabularx}{\textwidth}{@{}XXXX@{}}
+  {\scriptsize\sffamily\textcolor{muted}{FORMAL CALCULUS}}\newline
+  {\small\sffamily\bfseries\textcolor{ink}{18+ Theorems}}\newline
+  {\scriptsize\sffamily\textcolor{accentdeep}{\texttt{LabAttribLean} (\texttt{0 sorry})}} &
+  {\scriptsize\sffamily\textcolor{muted}{GHOST-PEAK GUARD}}\newline
+  {\small\sffamily\bfseries\textcolor{ink}{0.0\% XRD FDR}}\newline
+  {\scriptsize\sffamily\textcolor{accentdeep}{vs.\ \texttt{66.7\%} Naive Peak Match}} &
+  {\scriptsize\sffamily\textcolor{muted}{ACTIVE DISCOVERY}}\newline
+  {\small\sffamily\bfseries\textcolor{ink}{+29.5\% True Hits}}\newline
+  {\scriptsize\sffamily\textcolor{accentdeep}{\texttt{-22.0\%} Post-Campaign MAE}} &
+  {\scriptsize\sffamily\textcolor{muted}{ATTRIBUTED FRONTIER}}\newline
+  {\small\sffamily\bfseries\textcolor{ink}{54.4 Scaffolds}}\newline
+  {\scriptsize\sffamily\textcolor{accentdeep}{\texttt{0} OOD Leaps $\cdot$ \texttt{89.7\%} Cov.}}
+\end{tabularx}
+\end{tcolorbox}
+
+\vspace{0pt}
+\begin{center}
+  \includegraphics[width=0.82\textwidth]{figures/fig1_scm_and_calculus.pdf}\par\vspace{1.5pt}
+  \parbox{0.95\textwidth}{\scriptsize \textbf{\textsf{Figure 1:}} \textcolor{slate}{\textbf{Structural Causal Model and Four-Way Blame Partition in \texttt{lab-attrib}.} \textbf{(A)} Raw wet-lab signal $Y$ is jointly governed by execution cleanliness $E$, analytical identifiability $I$, and latent science $Z$. \textbf{(B)} \texttt{LabAttribLean} proves an exhaustive, mutually exclusive 4-way partition blocking memory write-back unless $E=1 \land I=1$. \textbf{(C)} Uncertified outcomes route to robot recalibration or EVOI secondary characterization; certified hits and \emph{Proof-Carrying Negatives} enter a SHA-256 ledger and recalibrate annular \texttt{Chem-RRT} stepping-stones.}}
+\end{center}
+\setcounter{figure}{1}
+
+\clearpage
+
+% ============================================================================
+% SECTION 1: THE POST-EXECUTION EPISTEMIC BOTTLENECK
+% ============================================================================
+\section{Introduction: The Post-Execution Blind Spot in Autonomous Science}
+
+Autonomous laboratories increasingly rely on pre-execution safety harnesses—type-checked liquid-handling compilers, digital-twin volume checks, and collision-free trajectory planners—to prevent physical equipment damage. However, recent controversies across autonomous materials synthesis and AI-driven experimentation reveal that \textbf{physical execution safety does not imply epistemic validity}:
+\begin{itemize}[leftmargin=1.5em, itemsep=2pt, topsep=2pt]
+  \item \textbf{False Positive Phase Claims from Precursor Peak Overlap.} In high-throughput solid-state synthesis (notably the A-Lab debate~\cite{szymanski2023alab,palgrave2024alabcritique}), multi-component powder X-ray diffraction (XRD) patterns frequently retain unreacted starting precursors whose Bragg reflections overlap diagnostic lines of putative novel phases. Cosine-similarity or top-peak classifiers mistake precursor mixtures for novel crystals ($I=0 \implies \hat{Z}=1$).
+  \item \textbf{False Negative Contamination from Silent Execution Glitches.} Conversely, in automated biochemical screening and agentic tree search~\cite{yamada2025aiscientistv2}, partial pipette cavitation, missed post-incubation handoff windows, or unsealed high-temperature evaporation yield near-zero optical signal ($E=0 \implies Y \approx 0$). Recording $Y \approx 0$ directly into surrogate memory~\cite{martin2026memory} permanently masks active chemotypes behind fabricated negative constraints.
+  \item \textbf{Corrupted Trust-Boundary Expansion.} When an agent expands its conformal domain of applicability~\cite{gibbs2021aci,narayanan2025ether0} via micro-scale frontier probes in an annular shell $\tau_t < d(x) \le (1+\eta)\tau_t$, admitting unattributed probe readouts shifts empirical quantiles and degrades nominal $1-\alpha$ coverage below target.
+\end{itemize}
+
+\textbf{Core Thesis.} Scientific memory—whether an assay database, a Gaussian-process / random-forest surrogate, or an RLVR reward ledger—must accept \textbf{Proof-Carrying Scientific Outcomes} exclusively: every positive hit \emph{and} every negative result must carry a machine-checkable certificate establishing both execution cleanliness ($E=1$) and analytical identifiability ($I=1$).
+
+% ============================================================================
+% SECTION 2: STRUCTURAL CAUSAL MODEL & LEAN 4 BLAME CALCULUS
+% ============================================================================
+\section{Causal Observation Model and Lean 4 Blame Calculus}
+
+Let $Z \in \{0,1\}$ denote latent target activity/phase formation for candidate $x$, $E \in \{0,1\}$ denote physical and plate-control cleanliness, and $I \in \{0,1\}$ denote analytical identifiability. Under the wet-lab Structural Causal Model $\mathcal{M}_{\mathrm{wet}}$, the binarized activity indicator $S = \mathbb{I}[Y \ge \theta_{\mathrm{hit}}]$ obeys:
+\begin{equation}
+  S \;=\; E \cdot Z \cdot \mathbb{I}[I = 1] \;+\; E \cdot G_{\mathrm{ghost}} \cdot \mathbb{I}[I = 0] \;+\; \xi_{\mathrm{ctrl}}\cdot\mathbb{I}[E = 0],
+\end{equation}
+where $G_{\mathrm{ghost}} \in \{0,1\}$ represents precursor peak mimicry when $I=0$ and $\xi_{\mathrm{ctrl}}$ is corrupted hardware output when $E=0$. Whenever $E=1 \land I=1$, the structural equation collapses to $S = Z$, making both $(S=1 \implies Z=1)$ and $(S=0 \implies Z=0)$ \emph{identifiable causal truths}.
+
+\begin{formalbox}{Theorems 1--4 (Exhaustive Partition, Ghost-Peak Guard \& Certified Negative Soundness)}{LabAttribLean.lean}
+Given $t : \mathrm{AssayTelemetry}$ with $\mathrm{executionClean}(t) \equiv t.\mathrm{preGate} \land t.\mathrm{acoustic} \land t.\mathrm{window} \land t.\mathrm{tactile} \land t.\mathrm{posCtrl} \land t.\mathrm{negBlank}$ and $\mathrm{characterizationIdentifiable}(t) \equiv (t.R_{\mathrm{wp}} \le R_{\max}) \land (t.\mathrm{overlap} \le \Omega_{\max})$:
+\begin{enumerate}[leftmargin=1.5em, itemsep=1.5pt, topsep=2pt]
+  \item \textbf{Zero Memory Poisoning (\texttt{corrupted\_run\_never\_poisons\_memory}):} Any failure among the 6 execution/control predicates forces $\mathrm{attributeAssayOutcome}(t) = \texttt{.executionArtifact}$ and $\mathrm{admitToScientificMemory} = \texttt{false}$.
+  \item \textbf{Formal A-Lab Precursor Safeguard (\texttt{unidentifiable\_spectrum\_never\_certified}):} If $R_{\max} < t.R_{\mathrm{wp}} \lor \Omega_{\max} < t.\mathrm{overlap}$, then $\mathrm{attributeAssayOutcome}(t) \notin \{\texttt{.certifiedPositive}, \texttt{.certifiedNegative}\}$.
+  \item \textbf{Proof-Carrying Negative Soundness (\texttt{certified\_negative\_sound}):} $\mathrm{attributeAssayOutcome}(t) = \texttt{.certifiedNegative} \implies \mathrm{executionClean}(t) = \texttt{true} \land t.R_{\mathrm{wp}} \le R_{\max} \land t.\mathrm{overlap} \le \Omega_{\max} \land t.\mathrm{signalHi} = \texttt{false}$.
+\end{enumerate}
+\end{formalbox}
+
+% ============================================================================
+% SECTION 3: NNLS PRECURSOR DECONVOLUTION & EVOI ORTHOGONAL ROUTING
+% ============================================================================
+\section{NNLS Precursor Ghost-Peak Deconvolution \& Orthogonal Routing}
+
+To ground $t.\mathrm{overlap}$ and $t.R_{\mathrm{wp}}$ on continuous diffractograms $y \in \mathbb{R}_{\ge 0}^M$ over $2\theta \in [15^\circ, 65^\circ]$, \texttt{lab\_attrib.\allowbreak xrd\_deconvolve} solves two nested Non-Negative Least-Squares (NNLS) problems against known starting-precursor reference patterns $P = [p_1,\dots,p_K] \in \mathbb{R}_{\ge 0}^{M \times K}$ and putative target template $s_{\star} \in \mathbb{R}_{\ge 0}^M$:
+\begin{equation}
+  \hat{c}_{\mathrm{prec}} = \arg\min_{c \ge 0} \|y - P c\|_2^2, \qquad (\hat{c}_{\mathrm{joint}}, \hat{\beta}) = \arg\min_{c \ge 0,\, \beta \ge 0} \|y - P c - \beta s_{\star}\|_2^2.
+\end{equation}
+We define the precursor-explained energy fraction $\Omega(y) = 1 - \|y - P\hat{c}_{\mathrm{prec}}\|_2 / \|y\|_2$ and weighted profile residual $R_{\mathrm{wp}}(y) = \|y - P\hat{c}_{\mathrm{joint}} - \hat{\beta} s_{\star}\|_2 / \|y\|_2$. As shown in Figure~\ref{fig:xrd}A, an unreacted two-precursor mixture lacking the diagnostic $41.5^\circ$ target reflection fools naive peak-matching ($\mathrm{FDR} = 66.7\%$), whereas \texttt{LabAttribLean}'s joint $(\Omega \le \Omega_{\max}, R_{\mathrm{wp}} \le R_{\max})$ gate achieves \textbf{$0.0\%$ FDR at $100.0\%$ true-phase recall} across $N=60$ mixed-phase spectra (Figure~\ref{fig:xrd}B).
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=0.98\textwidth]{figures/fig2_xrd_ghost_deconvolution.pdf}
+  \caption{\textbf{NNLS Precursor Ghost-Peak Deconvolution.} \textbf{(A)} Observed diffractogram generated purely from unreacted precursors A+B shares major peaks with the putative target phase ($22.5^\circ, 33.1^\circ, 54.1^\circ$) but lacks the diagnostic $41.5^\circ$ reflection; NNLS precursor attribution detects $96.4\%$ precursor overlap and routes the sample to \texttt{.ambiguousCharacterization}. \textbf{(B)} Across 60 synthetic multi-phase spectra, \texttt{lab-attrib} eliminates all false discoveries ($66.7\% \to 0.0\%$) without losing true novel phases.}
+  \label{fig:xrd}
+\end{figure}
+
+When $\mathrm{attributeAssayOutcome}(t) = \texttt{.ambiguous\allowbreak Characterization}$, discarding the sample outright wastes synthesis effort, whereas running transmission electron microscopy (\texttt{TEM}) on every sample exhausts analytical budgets. In \texttt{lab\_attrib.\allowbreak orthogonal\_router}, we select secondary modality $m \in \{\texttt{Raman}, \allowbreak \texttt{LC-MS}, \allowbreak \texttt{1H-NMR}, \allowbreak \texttt{TEM}, \allowbreak \texttt{Discard}\}$ maximizing Expected Value of Information minus assay cost:
+\begin{equation}
+  m^\star = \arg\max_{m} \Big[\, p_{\mathrm{post}}(Z=1 \mid y)\cdot \mathrm{TPR}_m \cdot V_{\mathrm{hit}} + \big(1 - p_{\mathrm{post}}(Z=1 \mid y)\big)\cdot \mathrm{TNR}_m \cdot V_{\mathrm{certNeg}} - C_m \,\Big],
+\end{equation}
+promoting confirmed/refuted readouts into the ledger via Lean theorems \texttt{orthogonal\_confirm\_\allowbreak promotes\_\allowbreak certified\_positive} and \texttt{orthogonal\_refute\_\allowbreak promotes\_\allowbreak certified\_negative}.
+
+% ============================================================================
+% SECTION 4: CLOSED-LOOP ACTIVE LEARNING & ATTRIBUTED CHEM-RRT FRONTIERS
+% ============================================================================
+\section{Empirical Evaluation: Active Learning \& Attributed \texttt{Chem-RRT}}
+
+\textbf{Closed-Loop Active Learning on Delaney ESOL.} We evaluate 6-round active molecular screening ($N=1{,}128$ real Delaney ESOL~\cite{delaney2004esol} compounds, 5 seeds) under realistic laboratory fault injection ($15\%$ execution glitches + $10\%$ spectral precursor overlap). Figure~\ref{fig:al} demonstrates that raw readout write-back accumulates $18.0$ poisoned records per campaign, stalling surrogate test MAE at $1.000$ $\log(\text{mol/L})$. By quarantining \texttt{.executionArtifact} for hardware retry and routing \texttt{.ambiguous\allowbreak Characterization} away from surrogate training, \texttt{lab-attrib} maintains \textbf{$0.0$ poisoned records}, reduces post-campaign surrogate MAE to \textbf{$0.780$ ($-22.0\%$)}, and lifts verified true soluble hits from $52.2$ to \textbf{$67.6$ ($+29.5\%$)}.
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=0.99\textwidth]{figures/fig3_active_learning_divergence.pdf}
+  \caption{\textbf{Six-Round Closed-Loop Active Learning on Real Delaney ESOL ($N=1{,}128$, 5 Seeds).} \textbf{(A)} Held-out surrogate MAE improves monotonically under \texttt{lab-attrib} ($1.000 \to 0.780$) while stalling under unattributed write-back. \textbf{(B)} Cumulative corrupted records admitted into \texttt{CertifiedLedger} remain strictly $0.0$. \textbf{(C)} Clean surrogate gradients yield $+29.5\%$ more verified soluble hits under identical wet-lab budget.}
+  \label{fig:al}
+\end{figure}
+
+\textbf{Coupling Post-Run Attribution with Annular \texttt{Chem-RRT} Frontier Calibration.} Finally, in \texttt{LabAttribLean} (\texttt{valid\_tau\_expansion\_\allowbreak requires\_\allowbreak certified\_micro\_probe}), we prove that updating conformal kNN support radius $\tau_t \to \tau_{t+1}$ via micro-scale ($\le 10\,\mu\text{L}$), in-stock annular probes $\tau_t < d(x) \le (1+\eta)\tau_t$ preserves calibration validity \emph{only} when probe readouts pass \texttt{admitToScientificMemory}. As shown in Figure~\ref{fig:frontier}A, unattributed shell probes suffer coverage erosion ($82.4\% < 90\%$) as corrupted probe readouts distort local nonconformity quantiles, whereas \textbf{Attributed \texttt{Chem-RRT} + Shell Calibration} unlocks \textbf{$54.4$ novel multi-ring scaffolds} ($45.3\times$ vs.\ static wall's $1.2$) at \textbf{$89.7\%$ empirical coverage} and $0$ uncalibrated production leaps, while EVOI orthogonal routing achieves $94.2\%$ net cost-adjusted information efficiency (Figure~\ref{fig:frontier}B).
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=0.98\textwidth]{figures/fig4_attributed_chem_rrt.pdf}
+  \caption{\textbf{Attributed Annular Frontier Expansion and Orthogonal Assay Routing.} \textbf{(A)} Without post-run \texttt{ATTRIB}, corrupted stepping-stone probes erode empirical conformal coverage to $82.4\%$; coupling annular micro-probes with \texttt{LabAttribLean} unlocks $54.4$ multi-ring scaffolds at $89.7\%$ coverage ($0$ OOD leaps). \textbf{(B)} EVOI orthogonal assay routing recovers $94.2\%$ net information efficiency vs.\ blind \texttt{TEM} or wholesale discard.}
+  \label{fig:frontier}
+\end{figure}
+
+\section{Conclusion}
+Pre-execution safety prevents a robot from breaking glassware; \textbf{post-execution formal attribution prevents an autonomous laboratory from breaking scientific truth}. By uniting Lean~4 blame proofs, NNLS precursor deconvolution, EVOI orthogonal routing, SHA-256 negative ledgers, and attributed annular frontier probes in \texttt{lab-attrib}, self-driving laboratories can turn negative results from noisy liabilities into permanent, proof-carrying scientific assets.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}
