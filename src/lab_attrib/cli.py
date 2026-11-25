@@ -1,4 +1,4 @@
-"""Command-line interface for `lab-attrib` (`demo`, `attribute`, `benchmark`)."""
+"""Command-line interface for `lab-attrib` (`demo`, `attribute`, `benchmark`, `datasets`)."""
 
 from __future__ import annotations
 
@@ -16,6 +16,12 @@ from lab_attrib.blame import (
     diagnose_assay,
 )
 from lab_attrib.ledger import CertifiedLedger
+from lab_attrib.open_datasets import (
+    REFERENCE_MINERAL_PHASES,
+    VALID_DATASET_MODALITIES,
+    list_open_datasets,
+    run_offline_reference_panel_benchmark,
+)
 from lab_attrib.orthogonal_router import route_orthogonal_assay
 from lab_attrib.xrd_deconvolve import build_gaussian_spectrum, deconvolve_spectrum
 
@@ -243,6 +249,57 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_datasets(args: argparse.Namespace) -> int:
+    datasets = list_open_datasets(
+        modality=args.modality,
+        commercial_only=args.commercial_only,
+    )
+    payload: dict[str, Any] = {
+        "n_datasets": len(datasets),
+        "n_reference_mineral_phases": len(REFERENCE_MINERAL_PHASES),
+        "datasets": [ds.to_dict() for ds in datasets],
+    }
+    if args.benchmark_panel:
+        payload["reference_panel_benchmark"] = run_offline_reference_panel_benchmark()
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print(
+        f"=== lab-attrib Open Characterization & Synthesis Registry "
+        f"({len(datasets)} datasets, {len(REFERENCE_MINERAL_PHASES)} bundled mineral phases) ==="
+    )
+    for ds in datasets:
+        comm = "commercial=OK" if ds.commercial_use_ok else "commercial=NO"
+        print(
+            f"  {ds.dataset_id:24s} | {ds.modality:10s} | {ds.spdx_license:10s} | "
+            f"{comm:13s} | records={ds.n_records:7d} | {ds.url}"
+        )
+    if args.benchmark_panel:
+        panel = payload["reference_panel_benchmark"]
+        spinel = panel["halide_spinel_ghost_trap"]
+        zro2 = panel["zirconia_raman_disambiguation"]
+        bto = panel["barium_titanate_clean_hit"]
+        print("\n=== Bundled Reference Mineral/Oxide Panel Benchmark (Zero-Network) ===")
+        print(
+            f"  [1] Li2MgCl4 Halide Spinel Ghost Trap : naive_cos={spinel['naive_cosine']:.3f} "
+            f"(naive_hit={spinel['naive_claims_hit']}) -> {spinel['primary_outcome']} "
+            f"(EVOI={spinel['centrosymmetric_selected_modality']})"
+        )
+        print(
+            f"  [2] ZrO2 Cubic/Tetragonal + Raman     : xrd_overlap={zro2['xrd_precursor_overlap_permille']} "
+            f"permille -> EVOI={zro2['selected_modality']} -> "
+            f"refute={zro2['post_raman_refutation_outcome']}, "
+            f"confirm={zro2['post_raman_confirmation_outcome']}"
+        )
+        print(
+            f"  [3] BaTiO3 Clean Perovskite Synthesis : beta={bto['target_amplitude']:.3f} -> "
+            f"{bto['outcome']} [{bto['lean_theorem_tag']}]"
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lab-attrib",
@@ -275,12 +332,35 @@ def build_parser() -> argparse.ArgumentParser:
         "benchmark",
         help="Run the 4-regime closed-loop attributed Chem-RRT frontier campaign",
     )
-    p_bench.add_argument("--csv", default=None, help="Optional path to Delaney ESOL CSV")
+    p_bench.add_argument("--csv", default=None, help="Optional path to Delaney ESOL or AqSolDB CSV/TSV")
     p_bench.add_argument("--rounds", type=int, default=9, help="Campaign rounds per seed")
     p_bench.add_argument("--batch-size", type=int, default=20, help="Assays per round")
     p_bench.add_argument("--output", default=None, help="Output JSON path")
     p_bench.add_argument("--json", action="store_true", help="Emit benchmark JSON to stdout")
     p_bench.set_defaults(func=_cmd_benchmark)
+
+    p_ds = sub.add_parser(
+        "datasets",
+        help="List open characterization/synthesis datasets and run offline mineral panel checks",
+    )
+    p_ds.add_argument(
+        "--modality",
+        choices=list(VALID_DATASET_MODALITIES),
+        default=None,
+        help="Filter registry by modality (XRD, Raman, LC-MS, 1H-NMR, Solubility)",
+    )
+    p_ds.add_argument(
+        "--commercial-only",
+        action="store_true",
+        help="Only include datasets with commercial_use_ok=True",
+    )
+    p_ds.add_argument(
+        "--benchmark-panel",
+        action="store_true",
+        help="Run zero-network NNLS & orthogonal router benchmark on bundled mineral/oxide panel",
+    )
+    p_ds.add_argument("--json", action="store_true", help="Emit structured JSON")
+    p_ds.set_defaults(func=_cmd_datasets)
 
     return parser
 

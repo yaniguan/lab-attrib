@@ -27,13 +27,20 @@ lab-attrib demo
 # 2. Attribute an individual post-execution telemetry JSON payload
 lab-attrib attribute --json
 
-# 3. Reproduce the 4-regime closed-loop attributed Chem-RRT benchmark
+# 3. Inspect the 9 open characterization/synthesis datasets & run the mineral XRD+Raman benchmark
+lab-attrib datasets --benchmark-panel
+
+# 4. Optionally fetch live spectral/solubility samples into gitignored data/open_datasets/
+python scripts/fetch_open_spectra.py --verify-urls
+python scripts/fetch_open_spectra.py --dataset rruff_powder_xrd --dataset alab_gpss_solid_state
+
+# 5. Reproduce the 4-regime closed-loop attributed Chem-RRT benchmark (Delaney ESOL or AqSolDB)
 lab-attrib benchmark --json
 
-# 4. Run Python unit, wire contract & Lean parity tests (67 tests)
+# 6. Run Python unit, open-dataset parser, wire contract & Lean parity tests (75 tests)
 pytest -v
 
-# 5. Machine-check all 29 Lean 4.36.0 theorems & build lab-attrib-lean CLI (0 sorry, 0 axiom, 0 warnings)
+# 7. Machine-check all 29 Lean 4.36.0 theorems & build lab-attrib-lean CLI (0 sorry, 0 axiom, 0 warnings)
 cd lean && lake build
 ```
 
@@ -60,7 +67,22 @@ flowchart LR
 ```
 
 ### 2. Data
-- **Empirical Closed-Loop Frontier Benchmark (`Delaney ESOL`, `1,128` molecules)**: Evaluates 6 physicochemical descriptors (`Minimum Degree`, `Molecular Weight`, `Number of H-Bond Donors`, `Number of Rings`, `Number of Rotatable Bonds`, `Polar Surface Area`) and measured aqueous log solubility ($\log S$). Partitions low-MW fragments (`Rings <= 2`, `MW <= 220 Da`, `657` molecules) into seed training/calibration and explores `471` higher-MW and multi-ring (`Rings >= 3`, up to `8` rings) frontier candidates (`44` true soluble multi-ring hits with $\log S \ge -3.50$). Includes an automatic deterministic `720`-molecule synthetic physicochemical fallback (`build_synthetic_esol_pool`) when external CSV files are absent.
+- **Open Multi-Modal Characterization & Synthesis Registry (`src/lab_attrib/open_datasets.py`, `scripts/fetch_open_spectra.py`)**: Grounds `lab-attrib`'s NNLS deconvolver, Bayesian EVOI orthogonal router, and closed-loop `Chem-RRT` campaign in **9 live-verified open-source spectroscopy, crystallography, solid-state synthesis, and solubility datasets** across `XRD`, `Raman`, `LC-MS`, `1H-NMR`, and `Solubility` (fetched on-demand into gitignored `data/open_datasets/`):
+
+| Dataset ID | Modality | SPDX License | Commercial OK | Records | Canonical Source & `lab-attrib` Integration |
+|---|---|---|:---:|---:|---|
+| `rruff_powder_xrd` | `XRD` | `Apache-2.0` | Yes | `5,842` | [AI4Spectro/rruff](https://huggingface.co/datasets/AI4Spectro/rruff) — RRUFF mineral powder XRD XY & DIF scans (`load_xy_diffractogram` -> `deconvolve_spectrum`) |
+| `rruff_raman_zenodo` | `Raman` | `CC-BY-4.0` | Yes | `21,490` | [Zenodo 15742626](https://zenodo.org/records/15742626) — RRUFF/WURM/SLOPP-E mineral Raman spectra (`load_raman_spectrum` -> `evaluate_raman_orthogonal_readout`) |
+| `cod_crystallography` | `XRD` | `CC0-1.0` | Yes | `530,000` | [Crystallography Open Database](https://www.crystallography.net/cod/) — Public-domain CIF & powder diffraction reference library |
+| `mp20_crystal_phases` | `XRD` | `CC-BY-4.0` | Yes | `45,231` | [Materials Project MP-20](https://github.com/txie-93/cdvae/tree/main/data/mp_20) — Competing inorganic crystal polymorphs ($\le 20$ atoms/cell) |
+| `alab_gpss_solid_state` | `XRD` | `CC-BY-4.0` | Yes | `352` | [CederGroupHub/alab_gpss_public](https://github.com/CederGroupHub/alab_gpss_public) ([Zenodo 19396297](https://zenodo.org/records/19396297)) — Autonomous halide spinel `.xrdml` scans, `LiCl` precursor fractions & $R_{\mathrm{wp}}$ (`load_alab_gpss_summary`) |
+| `massspecgym_msms` | `LC-MS` | `MIT` | Yes | `231,104` | [roman-bushuiev/MassSpecGym](https://huggingface.co/datasets/roman-bushuiev/MassSpecGym) — NeurIPS 2024 tandem MS/MS MGF/TSV/JSON spectra (`load_massspecgym_spectra` -> `evaluate_msms_orthogonal_readout`) |
+| `nmrshiftdb2_nmr` | `1H-NMR` | `OPL-1.0` | No | `70,029` | [NMRShiftDB2](https://nmrshiftdb.nmr.uni-koeln.de/) — Measured 1H/13C NMR reference shifts (`commercial_use_ok=False` under Open Content License) |
+| `bmrb_metabolomics_nmr` | `1H-NMR` | `CC0-1.0` | Yes | `5,200` | [BMRB](https://bmrb.io/) — Public-domain small-molecule 1H/13C NMR spectra (`commercial_use_ok=True` companion to `NMRShiftDB2`) |
+| `aqsoldb_solubility` | `Solubility` | `CC-BY-4.0` | Yes | `9,982` | [AqSolDB](https://huggingface.co/datasets/maomlab/AqSolDB) ([DOI 10.7910/DVN/OVHAW8](https://dataverse.harvard.edu/api/access/datafile/3407241)) — Curated aqueous $\log S$ & 2D descriptors (`load_aqsoldb_csv` -> `run_attributed_frontier_benchmark`) |
+
+- **Bundled Zero-Network Oxide/Halide/Mineral Reference Panel (`11` phases)**: Ships curated $\mathrm{Cu\,K\alpha}$ Bragg $2\theta$ peak tables paired with Raman vibrational shifts ($\mathrm{cm}^{-1}$) for `LiCl`, `MgCl2`, `Li2MgCl4`, cubic/tetragonal `ZrO2`, `Y2O3`, `TiO2` (anatase), `BaCO3` (witherite), `BaTiO3`, `Calcite` (`R050048`), and `Alpha-Quartz` (`COD-9009666`), enabling offline multiphase ghost-peak deconvolution and Raman/TEM orthogonal routing (`lab-attrib datasets --benchmark-panel`).
+- **Empirical Closed-Loop Frontier Benchmark (`Delaney ESOL`, `1,128` molecules & `AqSolDB`, `9,982` molecules)**: Evaluates 6 physicochemical descriptors (`Minimum Degree`, `Molecular Weight`, `Number of H-Bond Donors`, `Number of Rings`, `Number of Rotatable Bonds`, `Polar Surface Area`) and measured aqueous log solubility ($\log S$). Partitions low-MW fragments (`Rings <= 2`, `MW <= 220 Da`, `657` molecules on ESOL) into seed training/calibration and explores `471` higher-MW and multi-ring (`Rings >= 3`, up to `8` rings) frontier candidates (`44` true soluble multi-ring hits with $\log S \ge -3.50$). Includes an automatic deterministic `720`-molecule synthetic physicochemical fallback (`build_synthetic_esol_pool`) when external CSV files are absent.
 - **Multiphase Spectral & Fault Telemetry**: Synthetic multi-peak diffraction/optical profiles (`build_gaussian_spectrum`) covering precursor ghost-peak shadowing (`A-Lab` failure mode), third-party polymorph $R_{\mathrm{wp}}$ anomalies, zero-baseline buffer controls, and robotic aspiration/dispense/incubation/seal faults (`22%` hardware fault rate + `18%` precursor ghost-peak rate in closed-loop stress benchmarks).
 
 ### 3. Model
@@ -119,24 +141,29 @@ lab-attrib/
 │   ├── lakefile.toml                     # Lean 4 library & executable configuration
 │   ├── lean-toolchain                    # Pinned leanprover/lean4:v4.36.0
 │   └── README.md                         # Formal theorem inventory
+├── scripts/
+│   └── fetch_open_spectra.py             # On-demand spectral/solubility downloader & live URL verifier
 ├── src/lab_attrib/
 │   ├── blame.py                          # Exact Python mirror of 4-way blame & stepping-stone gates
 │   ├── xrd_deconvolve.py                 # Weighted active-set NNLS deconvolver + shift/baseline models
 │   ├── orthogonal_router.py              # Bayesian EVOI secondary assay router (Raman/LC-MS/NMR/TEM)
 │   ├── ledger.py                         # SHA-256 + Merkle + HMAC/Ed25519 CertifiedLedger & WAL
-│   ├── attributed_frontier.py            # 4-regime closed-loop Chem-RRT campaign on Delaney ESOL
-│   └── cli.py                            # `lab-attrib` CLI (`demo`, `attribute`, `benchmark`)
-└── tests/                                # 67 unit, wire-contract, numerical parity & zero-CJK tests
+│   ├── attributed_frontier.py            # 4-regime closed-loop Chem-RRT campaign on ESOL & AqSolDB
+│   ├── open_datasets.py                  # 9-dataset open registry, mineral panel & multi-modal parsers
+│   └── cli.py                            # `lab-attrib` CLI (`demo`, `attribute`, `benchmark`, `datasets`)
+└── tests/                                # 75 unit, open-dataset, wire-contract, parity & zero-CJK tests
 ```
 
 ---
 
 ## Scientific References & Motivation
-1. Szymanski, N. J. et al. *An autonomous laboratory for the accelerated synthesis of novel materials* (`A-Lab`), **Nature** 624, 86–91 (2023).
+1. Szymanski, N. J. et al. *An autonomous laboratory for the accelerated synthesis of novel materials* (`A-Lab`), **Nature** 624, 86–91 (2023); Ceder Group `alab_gpss_public` & Zenodo DOI `10.5281/zenodo.19396297` (2026).
 2. Cheetham, A. K. & Seshadri, R. *Artificial intelligence driving materials discovery? Perspective on the article: An autonomous laboratory for the accelerated synthesis of novel materials*, **Chemistry of Materials** 36, 3490–3495 (2024) — documenting precursor diffraction peak overlap and phase-identification pitfalls in autonomous XRD pipelines.
 3. Lawson, C. L. & Hanson, R. J. *Solving Least Squares Problems*, **SIAM** (1995) — active-set and non-negative least squares (`NNLS`) foundations.
-4. Delaney, J. S. *ESOL: Estimating aqueous solubility directly from molecular structure*, **Journal of Chemical Information and Computer Sciences** 44, 1000–1005 (2004).
-5. Vovk, V., Gammerman, A. & Shafer, G. *Algorithmic Learning in a Random World*, **Springer** (2005); Angelopoulos, A. N. & Bates, S. *Conformal prediction: A gentle introduction*, **Foundations and Trends in Machine Learning** (2023).
+4. Lafuente, B. et al. *The power of databases: The RRUFF project*, in *Highlights in Mineralogical Crystallography*, **De Gruyter**, 1–30 (2015); Grazulis, S. et al. *Crystallography Open Database (`COD`)*, **Nucleic Acids Research** 40, D420–D427 (2012).
+5. Bushuiev, R. et al. *MassSpecGym: A benchmark for the discovery and identification of molecules*, **NeurIPS** (2024); Sorkun, M. C., Khetan, A. & Er, S. *AqSolDB, a curated reference set of aqueous solubility and 2D descriptors for a diverse set of compounds*, **Scientific Data** 6, 143 (2019).
+6. Delaney, J. S. *ESOL: Estimating aqueous solubility directly from molecular structure*, **Journal of Chemical Information and Computer Sciences** 44, 1000–1005 (2004).
+7. Vovk, V., Gammerman, A. & Shafer, G. *Algorithmic Learning in a Random World*, **Springer** (2005); Angelopoulos, A. N. & Bates, S. *Conformal prediction: A gentle introduction*, **Foundations and Trends in Machine Learning** (2023).
 
 ## License
 MIT License — Copyright (c) 2026 Yani Guan. See [`LICENSE`](LICENSE).
