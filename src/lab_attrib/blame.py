@@ -20,6 +20,19 @@ MAX_SPECTRAL_RESIDUAL_PERMILLE: int = 100
 MIN_RESOLVABLE_SNR_TENTHS: int = 30
 MAX_STEPPING_STONE_VOLUME_UL: int = 10
 MAX_EXPANSION_ETA_PERMILLE: int = 500
+MIN_POS_CONTROL_RECOVERY_PERMILLE: int = 800
+MIN_Z_PRIME_TENTHS: int = 50
+MIN_POS_CONTROL_ZSCORE_TENTHS: int = 20
+
+_PLATE_CONTROL_FAULT_CODES: frozenset[str] = frozenset(
+    {
+        "POSITIVE_CONTROL_FAILED",
+        "BLANK_CONTAMINATED",
+        "POSITIVE_CONTROL_RECOVERY_DRIFT",
+        "LOW_PLATE_Z_PRIME_FACTOR",
+        "POSITIVE_CONTROL_ZSCORE_DRIFT",
+    }
+)
 
 
 class AttributionOutcome(str, Enum):
@@ -64,6 +77,9 @@ class AssayTelemetry:
     spectral_residual_permille: int
     snr_tenths: int
     target_signal_present: bool
+    positive_control_recovery_permille: int = 1000
+    plate_z_prime_tenths: int = 70
+    positive_control_zscore_tenths: int = 50
 
     def __post_init__(self) -> None:
         for name in (
@@ -71,10 +87,15 @@ class AssayTelemetry:
             "precursor_overlap_permille",
             "spectral_residual_permille",
             "snr_tenths",
+            "positive_control_recovery_permille",
         ):
             val = getattr(self, name)
             if isinstance(val, bool) or not isinstance(val, int) or val < 0:
                 raise ValueError(f"{name} must be a non-negative integer, got {val!r}")
+        for name in ("plate_z_prime_tenths", "positive_control_zscore_tenths"):
+            val = getattr(self, name)
+            if isinstance(val, bool) or not isinstance(val, int):
+                raise ValueError(f"{name} must be an integer, got {val!r}")
         for name in (
             "aspiration_clean",
             "incubation_window_clean",
@@ -89,7 +110,7 @@ class AssayTelemetry:
                 raise ValueError(f"{name} must be a bool, got {val!r}")
 
     def violated_execution_clauses(self) -> list[str]:
-        """Return ordered root-cause fault codes for any violated physical execution checks."""
+        """Return ordered root-cause fault codes for any violated physical or batch-control checks."""
         faults: list[str] = []
         if self.dispense_error_permille > MAX_DISPENSE_ERROR_PERMILLE:
             faults.append("DISPENSE_ERROR_EXCEEDED")
@@ -103,6 +124,12 @@ class AssayTelemetry:
             faults.append("POSITIVE_CONTROL_FAILED")
         if not self.blank_uncontaminated:
             faults.append("BLANK_CONTAMINATED")
+        if self.positive_control_recovery_permille < MIN_POS_CONTROL_RECOVERY_PERMILLE:
+            faults.append("POSITIVE_CONTROL_RECOVERY_DRIFT")
+        if self.plate_z_prime_tenths < MIN_Z_PRIME_TENTHS:
+            faults.append("LOW_PLATE_Z_PRIME_FACTOR")
+        if self.positive_control_zscore_tenths < MIN_POS_CONTROL_ZSCORE_TENTHS:
+            faults.append("POSITIVE_CONTROL_ZSCORE_DRIFT")
         return faults
 
     def violated_characterization_clauses(self) -> list[str]:
@@ -135,6 +162,13 @@ class AssayTelemetry:
             spectral_residual_permille=int(data["spectral_residual_permille"]),
             snr_tenths=int(data["snr_tenths"]),
             target_signal_present=bool(data["target_signal_present"]),
+            positive_control_recovery_permille=int(
+                data.get("positive_control_recovery_permille", 1000)
+            ),
+            plate_z_prime_tenths=int(data.get("plate_z_prime_tenths", 70)),
+            positive_control_zscore_tenths=int(
+                data.get("positive_control_zscore_tenths", 50)
+            ),
         )
 
 
@@ -197,6 +231,11 @@ class AttributionReport:
     violated_characterization_clauses: tuple[str, ...]
     resolved_via_orthogonal: bool
     lean_theorem_tag: str
+    dual_fault_detected: bool = False
+    compound_fault: bool = False
+    fault_scope: str = "NONE"
+    remediation_steps: tuple[str, ...] = ()
+    diagnostic_notes: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -209,6 +248,11 @@ class AttributionReport:
             "violated_characterization_clauses": list(self.violated_characterization_clauses),
             "resolved_via_orthogonal": self.resolved_via_orthogonal,
             "lean_theorem_tag": self.lean_theorem_tag,
+            "dual_fault_detected": self.dual_fault_detected,
+            "compound_fault": self.compound_fault,
+            "fault_scope": self.fault_scope,
+            "remediation_steps": list(self.remediation_steps),
+            "diagnostic_notes": list(self.diagnostic_notes),
         }
 
 
@@ -221,6 +265,9 @@ def execution_clean(telemetry: AssayTelemetry) -> bool:
         and telemetry.seal_intact
         and telemetry.positive_control_passed
         and telemetry.blank_uncontaminated
+        and telemetry.positive_control_recovery_permille >= MIN_POS_CONTROL_RECOVERY_PERMILLE
+        and telemetry.plate_z_prime_tenths >= MIN_Z_PRIME_TENTHS
+        and telemetry.positive_control_zscore_tenths >= MIN_POS_CONTROL_ZSCORE_TENTHS
     )
 
 
@@ -332,23 +379,64 @@ def diagnose_assay(
     """Produce a full diagnostic report combining blame calculus, routing, and Lean proof tags."""
     exec_ok = execution_clean(primary)
     ident_ok = characterization_identifiable(primary)
+    exec_clauses = tuple(primary.violated_execution_clauses())
+    char_clauses = tuple(primary.violated_characterization_clauses())
+    dual_fault = (not exec_ok) and (not ident_ok)
+
+    has_plate_fault = any(code in _PLATE_CONTROL_FAULT_CODES for code in exec_clauses)
+    if has_plate_fault:
+        fault_scope = "PLATE_REAGENT_CONTAMINATION"
+    elif exec_clauses:
+        fault_scope = "WELL_MECHANICAL"
+    else:
+        fault_scope = "NONE"
+
     primary_out = attribute_assay_outcome(primary)
     final_out = effective_attribution(primary, secondary)
+    final_action = route_diagnostic_action(final_out)
     resolved_orth = (
         secondary is not None
         and primary_out is AttributionOutcome.AMBIGUOUS_CHARACTERIZATION
         and admit_to_scientific_memory(final_out)
     )
+
+    steps: list[str] = []
+    notes: list[str] = []
+    if not exec_ok:
+        if not primary.detector_calibrated:
+            steps.append("RECALIBRATE_DETECTOR")
+        if has_plate_fault:
+            steps.append("REFRESH_PLATE_CONTROLS_AND_BLANKS")
+            notes.append(
+                "PLATE_REAGENT_CONTAMINATION: refresh control/blank troughs before robotic retry"
+            )
+        steps.append("RETRY_ROBOT")
+        if dual_fault:
+            notes.append("RECALIBRATE_AND_RETRY")
+            if any(c != "DETECTOR_UNCALIBRATED_OR_SATURATED" for c in char_clauses):
+                steps.append("PRE_STAGE_ORTHOGONAL_ASSAY")
+    elif final_out is AttributionOutcome.AMBIGUOUS_CHARACTERIZATION:
+        if not primary.detector_calibrated:
+            steps.append("RECALIBRATE_DETECTOR")
+        steps.append("RUN_ORTHOGONAL_ASSAY")
+    else:
+        steps.append(final_action.value)
+
     return AttributionReport(
         outcome=final_out,
-        action=route_diagnostic_action(final_out),
+        action=final_action,
         admit_to_memory=admit_to_scientific_memory(final_out),
         execution_clean=exec_ok,
         characterization_identifiable=ident_ok,
-        violated_execution_clauses=tuple(primary.violated_execution_clauses()),
-        violated_characterization_clauses=tuple(primary.violated_characterization_clauses()),
+        violated_execution_clauses=exec_clauses,
+        violated_characterization_clauses=char_clauses,
         resolved_via_orthogonal=resolved_orth,
         lean_theorem_tag=lean_certificate_tag_for(primary, secondary),
+        dual_fault_detected=dual_fault,
+        compound_fault=dual_fault,
+        fault_scope=fault_scope,
+        remediation_steps=tuple(steps),
+        diagnostic_notes=tuple(notes),
     )
 
 

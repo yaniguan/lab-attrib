@@ -14,7 +14,10 @@ from lab_attrib.blame import (
     MAX_PRECURSOR_OVERLAP_PERMILLE,
     MAX_SPECTRAL_RESIDUAL_PERMILLE,
     MAX_STEPPING_STONE_VOLUME_UL,
+    MIN_POS_CONTROL_RECOVERY_PERMILLE,
+    MIN_POS_CONTROL_ZSCORE_TENTHS,
     MIN_RESOLVABLE_SNR_TENTHS,
+    MIN_Z_PRIME_TENTHS,
     AssayTelemetry,
     AttributedSteppingStone,
     AttributionOutcome,
@@ -42,6 +45,7 @@ from lab_attrib.ledger import (
     CertifiedLedgerEntry,
     LedgerIntegrityError,
     LedgerRejectionError,
+    verify_inclusion_proof,
 )
 from lab_attrib.orthogonal_router import (
     DEFAULT_MODALITY_SPECS,
@@ -76,7 +80,10 @@ __all__ = [
     "MAX_PRECURSOR_OVERLAP_PERMILLE",
     "MAX_SPECTRAL_RESIDUAL_PERMILLE",
     "MAX_STEPPING_STONE_VOLUME_UL",
+    "MIN_POS_CONTROL_RECOVERY_PERMILLE",
+    "MIN_POS_CONTROL_ZSCORE_TENTHS",
     "MIN_RESOLVABLE_SNR_TENTHS",
+    "MIN_Z_PRIME_TENTHS",
     "ModalityEvaluation",
     "ModalitySpec",
     "MoleculeCandidate",
@@ -103,4 +110,5 @@ __all__ = [
     "route_diagnostic_action",
     "route_orthogonal_assay",
     "run_attributed_frontier_benchmark",
+    "verify_inclusion_proof",
 ]

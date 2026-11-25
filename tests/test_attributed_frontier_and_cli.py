@@ -7,12 +7,19 @@ from pathlib import Path
 
 import pytest
 
+import lab_attrib.attributed_frontier as af_mod
 from community_extensions import run_benchmark as run_extension_benchmark
 from lab_attrib.attributed_frontier import (
+    DEFAULT_CACHED_ESOL_CSV,
+    _run_single_seed_regime,
     build_synthetic_esol_pool,
+    is_locally_supported_in_tree,
+    resolve_molecule_pool,
     run_attributed_frontier_benchmark,
 )
 from lab_attrib.cli import main as cli_main
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_synthetic_esol_pool_is_deterministic_and_contains_frontier_hits() -> None:
@@ -38,7 +45,6 @@ def test_attributed_frontier_benchmark_synthetic_fallback_invariants() -> None:
     unattr = regimes["unattributed_frontier_probes"]
     full = regimes["lab_attrib_full_closed_loop"]
 
-    # Full closed-loop `lab-attrib` guarantees zero false discovery and zero poisoned memory
     assert full["false_discovery_rate_pct"] == 0.0
     assert full["mean_false_positive_hits"] == 0.0
     assert full["mean_poisoned_memory_entries"] == 0.0
@@ -46,16 +52,97 @@ def test_attributed_frontier_benchmark_synthetic_fallback_invariants() -> None:
     assert full["mean_certified_ledger_entries"] > 50.0
     assert full["mean_final_tau"] > full["mean_initial_tau"]
 
-    # Naive and unattributed regimes suffer severe memory poisoning and false positives
     assert naive["mean_poisoned_memory_entries"] > 20.0
     assert naive["false_discovery_rate_pct"] > 15.0
     assert unattr["mean_poisoned_memory_entries"] > 20.0
 
-    # Full closed-loop discovers more verified multi-ring hits than static pre-gate
-    # and achieves substantially better conformal calibration & lower RMSE than unattributed probes
     assert full["mean_verified_multi_ring_hits"] > static["mean_verified_multi_ring_hits"]
     assert full["conformal_coverage_pct"] >= 82.0
     assert full["mean_frontier_rmse"] < unattr["mean_frontier_rmse"]
+
+
+def test_issue10_no_user_specific_paths_single_pass_csv_and_directional_knn_locality(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 1. Zero user-specific or machine-specific hardcoded paths in src/lab_attrib/
+    assert "Users" not in DEFAULT_CACHED_ESOL_CSV.parts or REPO_ROOT in DEFAULT_CACHED_ESOL_CSV.parents
+    for src_file in (REPO_ROOT / "src" / "lab_attrib").glob("*.py"):
+        src_text = src_file.read_text(encoding="utf-8")
+        assert "yanig" not in src_text
+        assert "c71e01d3" not in src_text
+
+    # 2. Single-pass CSV read in resolve_molecule_pool
+    mini_csv = tmp_path / "mini_esol.csv"
+    mini_csv.write_text(
+        "Compound ID,smiles,Minimum Degree,Molecular Weight,Number of H-Bond Donors,"
+        "Number of Rings,Number of Rotatable Bonds,Polar Surface Area,"
+        "measured log solubility in mols per litre\n"
+        "Ethanol,CCO,1,46.07,1,0,0,20.23,1.12\n"
+        "Benzene,c1ccccc1,2,78.11,0,1,0,0.00,-1.64\n",
+        encoding="utf-8",
+    )
+    read_calls = 0
+    real_loader = af_mod.load_delaney_esol_csv
+
+    def _counting_loader(path: Path) -> list[af_mod.MoleculeCandidate]:
+        nonlocal read_calls
+        read_calls += 1
+        return real_loader(path)
+
+    monkeypatch.setattr(af_mod, "load_delaney_esol_csv", _counting_loader)
+    loaded, label = resolve_molecule_pool(mini_csv)
+    assert read_calls == 1
+    assert len(loaded) == 2
+    assert "2 molecules" in label
+
+    # 3. Directional Chem-RRT support: stepping-stone at +3.0 sigma along z_1 NEVER unlocks -3.0 sigma along z_4
+    seed_cloud = [
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        (0.2, -0.1, 0.0, 0.1, 0.0, 0.0),
+        (-0.1, 0.2, 0.1, 0.0, -0.1, 0.0),
+    ]
+    support_with_z1_ray = [
+        *seed_cloud,
+        (1.2, 0.0, 0.0, 0.0, 0.0, 0.0),
+        (2.1, 0.0, 0.0, 0.0, 0.0, 0.0),
+        (3.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    ]
+    near_z1_probe = (2.85, 0.05, 0.0, 0.0, 0.0, 0.0)
+    antipodal_z4_unprobed = (0.0, 0.0, 0.0, -3.0, 0.0, 0.0)
+
+    assert is_locally_supported_in_tree(
+        near_z1_probe, support_with_z1_ray, local_tau=1.25, k_neighbors=3
+    ) is True
+    assert is_locally_supported_in_tree(
+        antipodal_z4_unprobed, support_with_z1_ray, local_tau=1.25, k_neighbors=3
+    ) is False
+
+
+def test_issue10_short_budget_campaign_prevents_isotropic_tau_doubling_and_preserves_coverage() -> None:
+    pool = build_synthetic_esol_pool(n_molecules=720, seed=0)
+    seed_dom = [m for m in pool if m.rings <= 2 and m.features[1] <= 220.0]
+    front_dom = [m for m in pool if not (m.rings <= 2 and m.features[1] <= 220.0)]
+
+    coverages: list[float] = []
+    for s in (11, 23, 37, 53, 71):
+        metrics = _run_single_seed_regime(
+            "lab_attrib_full_closed_loop",
+            seed_dom[:200],
+            seed_dom[200:260],
+            front_dom[60:],
+            front_dom[:60],
+            seed=s,
+            n_rounds=2,
+            batch_size=10,
+            eta_permille=420,
+        )
+        # Cannot double global tau on a 2-round under-sampled campaign
+        assert metrics["final_tau"] < 1.65 * metrics["initial_tau"]
+        coverages.append(float(metrics["conformal_coverage_90"]))
+
+    mean_cov = sum(coverages) / len(coverages)
+    assert mean_cov >= 0.90
 
 
 def test_community_extension_entrypoint_returns_valid_summary() -> None:
