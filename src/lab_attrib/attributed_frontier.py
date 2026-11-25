@@ -93,20 +93,46 @@ class MoleculeCandidate:
 
 
 def load_delaney_esol_csv(csv_path: Path) -> list[MoleculeCandidate]:
-    """Load Delaney ESOL molecules from CSV (read-only)."""
+    """Load Delaney ESOL or AqSolDB solubility molecules from CSV/TSV (single-pass read-only)."""
     molecules: list[MoleculeCandidate] = []
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
+        first_line = handle.readline()
+        if not first_line:
+            return molecules
+        delimiter = "\t" if "\t" in first_line else ","
+        handle.seek(0)
+        reader = csv.DictReader(handle, delimiter=delimiter)
         for idx, row in enumerate(reader):
-            cid = (row.get("Compound ID") or f"ESOL-{idx:04d}").strip()
-            smiles = (row.get("smiles") or "").strip()
-            min_deg = float(row["Minimum Degree"])
-            mw = float(row["Molecular Weight"])
-            hbd = float(row["Number of H-Bond Donors"])
-            rings = int(round(float(row["Number of Rings"])))
-            rot = float(row["Number of Rotatable Bonds"])
-            psa = float(row["Polar Surface Area"])
-            log_s = float(row["measured log solubility in mols per litre"])
+            cid = (
+                row.get("Compound ID")
+                or row.get("ID")
+                or row.get("Name")
+                or f"ESOL-{idx:04d}"
+            ).strip()
+            smiles = (row.get("smiles") or row.get("SMILES") or "").strip()
+            raw_mw = row.get("Molecular Weight") or row.get("MolWt")
+            raw_hbd = row.get("Number of H-Bond Donors") or row.get("NumHDonors")
+            raw_rings = row.get("Number of Rings") or row.get("RingCount")
+            raw_rot = row.get("Number of Rotatable Bonds") or row.get("NumRotatableBonds")
+            raw_psa = row.get("Polar Surface Area") or row.get("TPSA")
+            raw_logs = (
+                row.get("measured log solubility in mols per litre")
+                or row.get("Solubility")
+                or row.get("Y")
+            )
+            if any(v in (None, "") for v in (raw_mw, raw_hbd, raw_rings, raw_rot, raw_psa, raw_logs)):
+                continue
+            mw = float(str(raw_mw))
+            hbd = float(str(raw_hbd))
+            rings = int(round(float(str(raw_rings))))
+            rot = float(str(raw_rot))
+            psa = float(str(raw_psa))
+            log_s = float(str(raw_logs))
+            raw_min_deg = row.get("Minimum Degree")
+            if raw_min_deg not in (None, ""):
+                min_deg = float(str(raw_min_deg))
+            else:
+                min_deg = 1.0 if (rings == 0 or hbd >= 1.0 or rot >= 1.0) else 2.0
             molecules.append(
                 MoleculeCandidate(
                     compound_id=f"{cid}#{idx}",

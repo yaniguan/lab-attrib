@@ -17,3 +17,7 @@ build/
 dist/
 .venv/
 venv/
+
+# Downloaded external datasets and spectral archives (fetched on-demand)
+data/
+benchmarks/data/

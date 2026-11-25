@@ -36,6 +36,8 @@ jobs:
           lab-attrib demo
           lab-attrib demo --json > /dev/null
           lab-attrib attribute --json > /dev/null
+          lab-attrib datasets --benchmark-panel
+          lab-attrib datasets --json > /dev/null
 
   lean-proofs:
     name: lean-proofs (v4.36.0)
