@@ -7,9 +7,9 @@ and Certified Negative Ledger). Formalizes four tightly coupled verification mod
 1. **4-Way Mutually Exclusive & Exhaustive Blame Calculus** (`AssayTelemetry`,
    `AttributionOutcome`, `executionClean`, `characterizationIdentifiable`,
    `attributeAssayOutcome`, `admitToScientificMemory`):
-   Separates robotic/incubation execution faults (`Sakana AI Scientist-v2` / `La Agente Optima`
-   zero-signal conflation) and analytical precursor ghost-peak overlap (`A-Lab` XRD controversy)
-   from genuine certified negative and certified positive scientific discoveries.
+   Separates robotic/incubation/batch-control execution faults (`Sakana AI Scientist-v2` /
+   `La Agente Optima` zero-signal conflation) and analytical precursor ghost-peak overlap
+   (`A-Lab` XRD controversy) from genuine certified negative and certified positive discoveries.
 2. **Orthogonal-Assay Secondary Resolution** (`OrthogonalModality`, `OrthogonalAssayReadout`,
    `resolveAmbiguousSample`, `effectiveAttribution`):
    Promotes spectrally ambiguous samples to certified outcomes iff primary wet-lab execution was
@@ -21,10 +21,10 @@ and Certified Negative Ledger). Formalizes four tightly coupled verification mod
    to achieve post-execution `admitToScientificMemory = true` before expanding conformal trust
    radius `tau_{t+1}`.
 4. **Hash-Chained Certified Scientific Ledger** (`LedgerEntry`, `LedgerValid`,
-   `appendCertifiedEntry`):
-   Proves by induction that append-only certified admission preserves hash-chain integrity and
-   guarantees every ledger record is backed by clean wet-lab execution and identifiable
-   analytical characterization.
+   `appendCertifiedEntry`, `computeAbstractEntryHash`):
+   Commits full sample-ID codepoints, all `AssayTelemetry` fields, and `Option OrthogonalAssayReadout`
+   into every ledger link, proving by induction that append-only certified admission preserves
+   hash-chain integrity and rejects telemetry tampering.
 -/
 namespace LabAttribLean
 
@@ -48,21 +48,33 @@ def maxSteppingStoneVolumeUl : Nat := 10
 /-- Maximum single-step annular frontier expansion factor eta in permille (500 = 50.0%). -/
 def maxExpansionEtaPermille : Nat := 500
 
+/-- Minimum tolerated positive-control signal recovery in permille (800 = 80.0%). -/
+def minPosControlRecoveryPermille : Nat := 800
+
+/-- Minimum tolerated screening plate Z'-factor in tenths (50 = Z' 0.50). -/
+def minZPrimeTenths : Int := 50
+
+/-- Minimum tolerated positive-control separation z-score in tenths (20 = 2.0 sigma). -/
+def minPosControlZscoreTenths : Int := 20
+
 /-! ## 2. 4-Way Post-Execution Blame Calculus -/
 
 /-- Post-execution robotic, environmental, control-well, and deconvolved spectral telemetry. -/
 structure AssayTelemetry where
-  dispenseErrorPermille    : Nat
-  aspirationClean          : Bool
-  incubationWindowClean    : Bool
-  sealIntact               : Bool
-  positiveControlPassed    : Bool
-  blankUncontaminated      : Bool
-  detectorCalibrated       : Bool
-  precursorOverlapPermille : Nat
-  spectralResidualPermille : Nat
-  snrTenths                : Nat
-  targetSignalPresent      : Bool
+  dispenseErrorPermille           : Nat
+  aspirationClean                 : Bool
+  incubationWindowClean           : Bool
+  sealIntact                      : Bool
+  positiveControlPassed           : Bool
+  blankUncontaminated             : Bool
+  detectorCalibrated              : Bool
+  precursorOverlapPermille        : Nat
+  spectralResidualPermille        : Nat
+  snrTenths                       : Nat
+  targetSignalPresent             : Bool
+  positiveControlRecoveryPermille : Nat := 1000
+  plateZPrimeTenths               : Int := 70
+  positiveControlZscoreTenths     : Int := 50
   deriving DecidableEq, Repr
 
 /-- Exhaustive 4-way causal attribution verdict after wet-lab execution. -/
@@ -81,14 +93,17 @@ inductive DiagnosticAction where
   | commitCertifiedHit : DiagnosticAction
   deriving DecidableEq, Repr
 
-/-- Physical wet-lab execution predicate: liquid handling, incubation, seal, and control wells. -/
+/-- Physical wet-lab execution predicate: liquid handling, incubation, seal, and control window. -/
 def executionClean (t : AssayTelemetry) : Bool :=
   decide (t.dispenseErrorPermille ≤ maxDispenseErrorPermille) &&
   t.aspirationClean &&
   t.incubationWindowClean &&
   t.sealIntact &&
   t.positiveControlPassed &&
-  t.blankUncontaminated
+  t.blankUncontaminated &&
+  decide (minPosControlRecoveryPermille ≤ t.positiveControlRecoveryPermille) &&
+  decide (minZPrimeTenths ≤ t.plateZPrimeTenths) &&
+  decide (minPosControlZscoreTenths ≤ t.positiveControlZscoreTenths)
 
 /-- Analytical characterization predicate: calibrated detector, A-Lab precursor guard, R_wp, SNR. -/
 def characterizationIdentifiable (t : AssayTelemetry) : Bool :=
@@ -96,6 +111,10 @@ def characterizationIdentifiable (t : AssayTelemetry) : Bool :=
   decide (t.precursorOverlapPermille ≤ maxPrecursorOverlapPermille) &&
   decide (t.spectralResidualPermille ≤ maxSpectralResidualPermille) &&
   decide (minResolvableSnrTenths ≤ t.snrTenths)
+
+/-- Compound physical + analytical fault indicator (`dual_fault_detected`). -/
+def dualFaultDetected (t : AssayTelemetry) : Bool :=
+  !executionClean t && !characterizationIdentifiable t
 
 /-- Deterministic post-execution causal attribution function. -/
 def attributeAssayOutcome (t : AssayTelemetry) : AttributionOutcome :=
@@ -144,7 +163,7 @@ theorem outcome_exhaustive_four_way (t : AssayTelemetry) :
     | false =>
       simp
     | true =>
-      cases hSig : t.targetSignalPresent <;> simp
+      cases t.targetSignalPresent <;> simp
 
 /-- Theorem 2: Any run failing physical execution QC is strictly blocked from scientific memory. -/
 theorem corrupted_run_never_poisons_memory (t : AssayTelemetry)
@@ -172,6 +191,40 @@ theorem hardware_fault_disjunction_never_poisons_memory (t : AssayTelemetry)
   · simp [hSeal]
   · simp [hPos]
   · simp [hBlank]
+
+/-- Quantitative batch-control drift (`recovery < 800`, `Z' < 0.50`, or `z < 2.0`) blocks memory admission. -/
+theorem control_drift_blocks_memory_admission (t : AssayTelemetry)
+    (hDrift :
+      t.positiveControlRecoveryPermille < minPosControlRecoveryPermille ∨
+      t.plateZPrimeTenths < minZPrimeTenths ∨
+      t.positiveControlZscoreTenths < minPosControlZscoreTenths) :
+    executionClean t = false ∧
+    admitToScientificMemory (attributeAssayOutcome t) = false := by
+  have hExecFalse : executionClean t = false := by
+    unfold executionClean
+    rcases hDrift with hRec | hZp | hZs
+    · have hNotLe : ¬ (minPosControlRecoveryPermille ≤ t.positiveControlRecoveryPermille) :=
+        Nat.not_le.mpr hRec
+      simp [hNotLe]
+    · have hNotLe : ¬ (minZPrimeTenths ≤ t.plateZPrimeTenths) :=
+        Int.not_le.mpr hZp
+      simp [hNotLe]
+    · have hNotLe : ¬ (minPosControlZscoreTenths ≤ t.positiveControlZscoreTenths) :=
+        Int.not_le.mpr hZs
+      simp [hNotLe]
+  exact ⟨hExecFalse, corrupted_run_never_poisons_memory t hExecFalse⟩
+
+/-- Dual-fault runs preserve `executionArtifact` memory quarantine while flagging both fault domains. -/
+theorem dual_fault_quarantines_memory (t : AssayTelemetry)
+    (hDual : dualFaultDetected t = true) :
+    executionClean t = false ∧
+    characterizationIdentifiable t = false ∧
+    attributeAssayOutcome t = .executionArtifact ∧
+    admitToScientificMemory (attributeAssayOutcome t) = false := by
+  simp only [dualFaultDetected, Bool.and_eq_true, Bool.not_eq_true'] at hDual
+  rcases hDual with ⟨hExec, hIdent⟩
+  exact ⟨hExec, hIdent, by simp [attributeAssayOutcome, hExec],
+    corrupted_run_never_poisons_memory t hExec⟩
 
 /-- Theorem 4: Formal A-Lab precursor-overlap & R_wp guard — unidentifiable spectra are never certified. -/
 theorem unidentifiable_spectrum_never_certified (t : AssayTelemetry)
@@ -330,7 +383,7 @@ theorem orthogonal_cannot_launder_corrupted_execution
   cases secondaryOpt with
   | none =>
     simp [effectiveAttribution, attributeAssayOutcome, admitToScientificMemory, hCorrupt]
-  | some sec =>
+  | some _ =>
     simp [effectiveAttribution, attributeAssayOutcome, admitToScientificMemory, hCorrupt]
 
 /-- Theorem 14: Exact admissibility characterization across primary + optional orthogonal resolution. -/
@@ -345,11 +398,11 @@ theorem effectiveAttribution_admissible_iff
     simp [effectiveAttribution, admit_iff_exec_clean_and_identifiable]
   | some sec =>
     unfold effectiveAttribution attributeAssayOutcome resolveAmbiguousSample admitToScientificMemory
-    cases hExec : executionClean primary with
+    cases executionClean primary with
     | false =>
       simp
     | true =>
-      cases hIdent : characterizationIdentifiable primary with
+      cases characterizationIdentifiable primary with
       | false =>
         cases hOrth : orthogonalReadoutClean sec with
         | false => simp [hOrth]
@@ -475,7 +528,7 @@ theorem valid_tau_expansion_requires_certified_micro_probe (p : AttributedSteppi
     Bool.and_eq_true, decide_eq_true_eq] at hOk
   simp_all [effectiveAttribution_admissible_iff]
 
-/-! ## 5. Hash-Chained Proof-Carrying Certified Ledger -/
+/-! ## 5. Hash-Chained Proof-Carrying Certified Ledger (Full Telemetry Commitment) -/
 
 /-- Immutable ledger record binding sample identity, raw telemetry, causal outcome, and hash chain. -/
 structure LedgerEntry where
@@ -491,15 +544,74 @@ structure LedgerEntry where
 /-- Genesis chain anchor hash. -/
 def GenesisHash : Nat := 0
 
-/-- Deterministic collision-sensitive abstract hash mixer for formal chain verification. -/
+/-- Mersenne prime modulus `2^61 - 1` for collision-sensitive rolling hash commitment. -/
+def HashModulus : Nat := 2305843009213693951
+
+/-- Mix one natural number lane into the polynomial rolling hash accumulator. -/
+def mixHashLane (acc : Nat) (val : Nat) : Nat :=
+  (acc * 1000003 + val + 97) % HashModulus
+
+/-- Bijective ZigZag encoding from `Int` to `Nat` for signed Z'-factor and z-score lanes. -/
+def encodeSignedInt (z : Int) : Nat :=
+  if 0 ≤ z then 2 * z.toNat else 2 * (-z).toNat - 1
+
+/-- Encode `Bool` as distinct non-zero lane tag. -/
+def encodeBoolLane (b : Bool) : Nat :=
+  if b then 2 else 1
+
+/-- Fold `s.length` and every Unicode codepoint of `s` into the hash accumulator. -/
+def hashStringCodepoints (acc : Nat) (s : String) : Nat :=
+  s.toList.foldl (fun st c => mixHashLane st c.toNat) (mixHashLane acc s.length)
+
+/-- Fold all 14 `AssayTelemetry` fields into the rolling hash accumulator. -/
+def hashAssayTelemetry (acc : Nat) (t : AssayTelemetry) : Nat :=
+  let s0  := mixHashLane acc t.dispenseErrorPermille
+  let s1  := mixHashLane s0  (encodeBoolLane t.aspirationClean)
+  let s2  := mixHashLane s1  (encodeBoolLane t.incubationWindowClean)
+  let s3  := mixHashLane s2  (encodeBoolLane t.sealIntact)
+  let s4  := mixHashLane s3  (encodeBoolLane t.positiveControlPassed)
+  let s5  := mixHashLane s4  (encodeBoolLane t.blankUncontaminated)
+  let s6  := mixHashLane s5  (encodeBoolLane t.detectorCalibrated)
+  let s7  := mixHashLane s6  t.precursorOverlapPermille
+  let s8  := mixHashLane s7  t.spectralResidualPermille
+  let s9  := mixHashLane s8  t.snrTenths
+  let s10 := mixHashLane s9  (encodeBoolLane t.targetSignalPresent)
+  let s11 := mixHashLane s10 t.positiveControlRecoveryPermille
+  let s12 := mixHashLane s11 (encodeSignedInt t.plateZPrimeTenths)
+  mixHashLane s12 (encodeSignedInt t.positiveControlZscoreTenths)
+
+/-- Fold optional secondary `OrthogonalAssayReadout` into the rolling hash accumulator. -/
+def hashOrthogonalOpt (acc : Nat) (orth : Option OrthogonalAssayReadout) : Nat :=
+  match orth with
+  | none => mixHashLane acc 0
+  | some r =>
+      let modCode := match r.modality with
+        | .lcMs   => 11
+        | .raman  => 12
+        | .temEds => 13
+        | .nmr1H  => 14
+      let u0 := mixHashLane acc modCode
+      let u1 := mixHashLane u0 (encodeBoolLane r.instrumentCalibrated)
+      let u2 := mixHashLane u1 r.orthogonalSnrTenths
+      let u3 := mixHashLane u2 (encodeBoolLane r.selectivityClean)
+      mixHashLane u3 (encodeBoolLane r.targetConfirmed)
+
+/-- Deterministic collision-sensitive abstract hash mixer committing `prevHash`, `index`,
+    full `sampleId` codepoints, all `AssayTelemetry` fields, `Option OrthogonalAssayReadout`,
+    and `AttributionOutcome`. -/
 def computeAbstractEntryHash (index : Nat) (sampleId : String)
+    (telemetry : AssayTelemetry) (orthogonal : Option OrthogonalAssayReadout)
     (outcome : AttributionOutcome) (prevHash : Nat) : Nat :=
   let outcomeCode := match outcome with
     | .executionArtifact         => 1
     | .ambiguousCharacterization => 2
     | .certifiedNegative         => 3
     | .certifiedPositive         => 4
-  ((prevHash * 1000003 + index * 9176 + sampleId.length * 257 + outcomeCode) % 2147483647) + 1
+  let h0 := mixHashLane prevHash index
+  let h1 := hashStringCodepoints h0 sampleId
+  let h2 := hashAssayTelemetry h1 telemetry
+  let h3 := hashOrthogonalOpt h2 orthogonal
+  (mixHashLane h3 outcomeCode) + 1
 
 /-- Single-entry well-formedness invariant at `(expectedIndex, expectedPrevHash)`. -/
 def EntryWellFormed (expectedIndex expectedPrevHash : Nat) (e : LedgerEntry) : Prop :=
@@ -507,7 +619,8 @@ def EntryWellFormed (expectedIndex expectedPrevHash : Nat) (e : LedgerEntry) : P
   e.prevHash = expectedPrevHash ∧
   e.outcome = effectiveAttribution e.telemetry e.orthogonal ∧
   admitToScientificMemory e.outcome = true ∧
-  e.entryHash = computeAbstractEntryHash e.index e.sampleId e.outcome e.prevHash
+  e.entryHash =
+    computeAbstractEntryHash e.index e.sampleId e.telemetry e.orthogonal e.outcome e.prevHash
 
 /-- Inductive hash-chain validity predicate parameterized by running index and predecessor hash. -/
 def LedgerChainValidAux : Nat → Nat → List LedgerEntry → Prop
@@ -532,7 +645,7 @@ def appendCertifiedEntry (chain : List LedgerEntry) (sampleId : String)
   if admitToScientificMemory out then
     let idx := chain.length
     let prevH := lastChainHash GenesisHash chain
-    let h := computeAbstractEntryHash idx sampleId out prevH
+    let h := computeAbstractEntryHash idx sampleId t orth out prevH
     let entry : LedgerEntry := {
       index      := idx
       sampleId   := sampleId
@@ -638,7 +751,18 @@ theorem tampered_prevHash_breaks_ledger_validity
   rcases hValid with ⟨⟨_, hPrevEq, _, _, _⟩, _⟩
   exact hTamper hPrevEq
 
-/-! ## 6. Concrete Compile-Time `#guard` Verification Suite (14 Checks) -/
+/-- Tampering with `sampleId`, `telemetry`, or `orthogonal` without updating `entryHash`
+    invalidates `LedgerValid`. -/
+theorem tampered_entryHash_breaks_ledger_validity
+    (e : LedgerEntry) (rest : List LedgerEntry)
+    (hTamper : e.entryHash ≠
+      computeAbstractEntryHash e.index e.sampleId e.telemetry e.orthogonal e.outcome e.prevHash) :
+    ¬ LedgerValid (e :: rest) := by
+  intro hValid
+  rcases hValid with ⟨⟨_, _, _, _, hHashEq⟩, _⟩
+  exact hTamper hHashEq
+
+/-! ## 6. Concrete Compile-Time `#guard` Verification Suite & Telemetry-Tamper Theorem -/
 
 /-- Canonical clean negative assay (true biochemical negative, clean execution, clean baseline). -/
 def sampleCleanNegative : AssayTelemetry := {
@@ -718,6 +842,17 @@ def sampleLcMsConfirmation : OrthogonalAssayReadout := {
   targetConfirmed      := true
 }
 
+/-- Same-outcome telemetry forgery (`dispenseErrorPermille = 50`, `snrTenths = 30`) and
+    same-length `sampleId` forgery (`"NEG-1"` vs `"FORGE"`) strictly change `computeAbstractEntryHash`. -/
+theorem tampered_telemetry_breaks_entry_hash :
+    computeAbstractEntryHash 0 "NEG-1" sampleCleanNegative none .certifiedNegative GenesisHash ≠
+      computeAbstractEntryHash 0 "FORGE" sampleCleanNegative none .certifiedNegative GenesisHash ∧
+    computeAbstractEntryHash 0 "NEG-1" sampleCleanNegative none .certifiedNegative GenesisHash ≠
+      computeAbstractEntryHash 0 "NEG-1"
+        { sampleCleanNegative with dispenseErrorPermille := 50, snrTenths := 30 }
+        none .certifiedNegative GenesisHash := by
+  decide
+
 -- Guard 1: Clean negative -> certifiedNegative
 #guard attributeAssayOutcome sampleCleanNegative == .certifiedNegative
 
@@ -793,5 +928,12 @@ def sampleLcMsConfirmation : OrthogonalAssayReadout := {
       match appendCertifiedEntry c1 "ALAB-001-RAMAN" sampleALabGhostPeak (some sampleRamanRefutation) with
       | none => false
       | some c2 => c2.length == 2 && (c2.getLast? |>.map (·.prevHash)) == (c2.head? |>.map (·.entryHash))
+
+-- Guard 15: Quantitative positive-control recovery drift (< 800 permille) blocks memory admission
+#guard attributeAssayOutcome { sampleCleanNegative with positiveControlRecoveryPermille := 620 } == .executionArtifact
+
+-- Guard 16: Telemetry or same-length sampleId tampering changes abstract entry hash
+#guard computeAbstractEntryHash 0 "NEG-1" sampleCleanNegative none .certifiedNegative GenesisHash !=
+       computeAbstractEntryHash 0 "FORGE" sampleCleanNegative none .certifiedNegative GenesisHash
 
 end LabAttribLean

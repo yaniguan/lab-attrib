@@ -1,6 +1,10 @@
 name = "lab-attrib-lean"
 version = "0.1.0"
-defaultTargets = ["LabAttribLean"]
+defaultTargets = ["LabAttribLean", "lab-attrib-lean"]
 
 [[lean_lib]]
 name = "LabAttribLean"
+
+[[lean_exe]]
+name = "lab-attrib-lean"
+root = "Main"

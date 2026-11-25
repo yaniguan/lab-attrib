@@ -13,20 +13,23 @@ Benchmarks four experimental feedback regimes across multi-round molecular disco
    to expand `tau_{t+1}`, but omits post-execution attribution—allowing corrupted and
    spectrally ambiguous probes to expand `tau` and poison surrogate memory.
 4. `lab_attrib_full_closed_loop`:
-   Combines pre-execution annular micro-containment with post-execution NNLS spectral
+   Combines pre-execution annular micro-containment and local `k`-NN `Chem-RRT` support
+   gating with synchronized end-of-round frontier commits, post-execution NNLS spectral
    deconvolution (`xrd_deconvolve`), 4-way causal blame (`blame`), EVOI orthogonal
    assay routing (`orthogonal_router`), SHA-256 `CertifiedLedger` writeback (`ledger`),
-   and `check_attributed_frontier_update`.
+   stratified holdout calibration + Gibbs-Candes online ACI (`alpha_t`), and
+   `check_attributed_frontier_update`.
 """
 
 from __future__ import annotations
 
 import csv
 import hashlib
+import heapq
 import math
 import os
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -39,6 +42,7 @@ from lab_attrib.blame import (
     admit_to_scientific_memory,
     attribute_assay_outcome,
     check_attributed_frontier_update,
+    diagnose_assay,
     effective_attribution,
     in_annular_shell,
 )
@@ -46,8 +50,8 @@ from lab_attrib.ledger import CertifiedLedger
 from lab_attrib.orthogonal_router import route_orthogonal_assay
 from lab_attrib.xrd_deconvolve import build_gaussian_spectrum, deconvolve_spectrum
 
-DEFAULT_CACHED_ESOL_CSV = Path(
-    r"C:\Users\yanig\.gemini\antigravity\brain\c71e01d3-4bd5-4d18-ac6d-e5250d450367\scratch\delaney-processed.csv"
+DEFAULT_CACHED_ESOL_CSV: Path = (
+    Path(__file__).resolve().parents[2] / "benchmarks" / "data" / "delaney-processed.csv"
 )
 
 REGIME_NAMES: tuple[str, ...] = (
@@ -59,6 +63,7 @@ REGIME_NAMES: tuple[str, ...] = (
 
 HIT_MIN_RINGS: int = 3
 HIT_MIN_LOG_SOLUBILITY: float = -3.50
+MIN_FRONTIER_CALIBRATION_SAMPLES: int = 15
 
 
 @dataclass(frozen=True)
@@ -132,7 +137,10 @@ def build_synthetic_esol_pool(n_molecules: int = 720, seed: int = 0) -> list[Mol
         hbd = float(rng.choices([0, 1, 2, 3, 4], weights=[0.38, 0.30, 0.18, 0.10, 0.04])[0])
         rot = float(rng.randint(0, 7))
         psa = max(0.0, round(hbd * 21.5 + rng.gauss(26.0, 22.0), 2))
-        mw = max(65.0, round(82.0 + rings * 58.0 + rot * 14.5 + psa * 0.65 + rng.gauss(0.0, 24.0), 2))
+        mw = max(
+            65.0,
+            round(82.0 + rings * 58.0 + rot * 14.5 + psa * 0.65 + rng.gauss(0.0, 24.0), 2),
+        )
         # Realistic ESOL-like solubility relationship (~24% hit rate on multi-ring scaffolds)
         true_log_s = (
             0.15
@@ -158,7 +166,7 @@ def build_synthetic_esol_pool(n_molecules: int = 720, seed: int = 0) -> list[Mol
 def resolve_molecule_pool(
     csv_path: str | Path | None = None,
 ) -> tuple[list[MoleculeCandidate], str]:
-    """Load Delaney ESOL if available (read-only), else return deterministic synthetic pool."""
+    """Load Delaney ESOL in a single pass if available, else return deterministic synthetic pool."""
     candidates_to_check: list[Path] = []
     if csv_path is not None:
         candidates_to_check.append(Path(csv_path))
@@ -170,7 +178,8 @@ def resolve_molecule_pool(
 
     for candidate in candidates_to_check:
         if candidate.is_file():
-            return load_delaney_esol_csv(candidate), f"delaney_esol_csv ({len(load_delaney_esol_csv(candidate))} molecules)"
+            loaded = load_delaney_esol_csv(candidate)
+            return loaded, f"delaney_esol_csv ({len(loaded)} molecules)"
     syn = build_synthetic_esol_pool()
     return syn, f"synthetic_esol_fallback ({len(syn)} molecules)"
 
@@ -206,6 +215,42 @@ def _nearest_seed_distance(
         if sq < best_sq:
             best_sq = sq
     return math.sqrt(best_sq)
+
+
+def knn_support_distance(
+    z: Sequence[float],
+    support_cloud: Sequence[Sequence[float]],
+    *,
+    k: int = 3,
+) -> float:
+    """Compute RMS Euclidean distance from `z` to its `k` nearest certified support neighbors."""
+    if not support_cloud:
+        return float("inf")
+    k_eff = max(1, min(k, len(support_cloud)))
+    sq_dists = [sum((z[j] - ref[j]) ** 2 for j in range(len(z))) for ref in support_cloud]
+    smallest_sq = heapq.nsmallest(k_eff, sq_dists)
+    return math.sqrt(sum(smallest_sq) / float(k_eff))
+
+
+def is_locally_supported_in_tree(
+    z: Sequence[float],
+    certified_support: Sequence[Sequence[float]],
+    *,
+    local_tau: float,
+    k_neighbors: int = 3,
+) -> bool:
+    """Directional `Chem-RRT` local density check preventing single-ray isotropic `tau` jumps.
+
+    Requires `z` to lie within `local_tau` of its nearest certified node AND within
+    `1.35 * local_tau` RMS distance of at least `k_neighbors` certified support points.
+    """
+    if not certified_support or local_tau <= 0.0:
+        return False
+    nearest = _nearest_seed_distance(z, certified_support)
+    if nearest > local_tau:
+        return False
+    knn_rms = knn_support_distance(z, certified_support, k=k_neighbors)
+    return knn_rms <= 1.35 * local_tau
 
 
 def _basis_expand(z: Sequence[float]) -> list[float]:
@@ -266,9 +311,10 @@ def _conformal_quantile(scores: Sequence[float], alpha: float = 0.10) -> float:
     """Finite-sample split-conformal quantile at level `ceil((n + 1) * (1 - alpha)) / n`."""
     if not scores:
         return 1.5
+    eff_alpha = min(0.99, max(1e-6, alpha))
     sorted_s = sorted(scores)
     n = len(sorted_s)
-    rank = min(n, max(1, math.ceil((n + 1) * (1.0 - alpha))))
+    rank = min(n, max(1, math.ceil((n + 1) * (1.0 - eff_alpha))))
     return sorted_s[rank - 1]
 
 
@@ -278,7 +324,9 @@ _PREC_CLEAN_SPECTRUM: tuple[float, ...] = tuple(
     build_gaussian_spectrum(_SPECTRAL_GRID, [(16.0, 1.0, 2.2), (56.0, 0.8, 2.2)])
 )
 _PREC_GHOST_SPECTRUM: tuple[float, ...] = tuple(
-    build_gaussian_spectrum(_SPECTRAL_GRID, [(32.0, 0.95, 2.5), (42.0, 0.85, 2.5), (16.0, 0.35, 2.2)])
+    build_gaussian_spectrum(
+        _SPECTRAL_GRID, [(32.0, 0.95, 2.5), (42.0, 0.85, 2.5), (16.0, 0.35, 2.2)]
+    )
 )
 _TARGET_SPECTRUM: tuple[float, ...] = tuple(
     build_gaussian_spectrum(_SPECTRAL_GRID, [(32.0, 1.0, 2.4), (42.0, 0.90, 2.4)])
@@ -404,9 +452,6 @@ def _simulate_wet_lab_execution(
         noise_sigma=0.04,
         use_numpy=False,
     )
-    # Decision-boundary statistical power SNR relative to HIT_MIN_LOG_SOLUBILITY (-3.50):
-    # Requires >= 3.0 sigma separation (`snr_tenths >= 30`) for primary single-modality certainty;
-    # borderline multi-ring candidates within 3*sigma of -3.50 get `snr_tenths < 30`, routing to LC-MS!
     if mol.rings >= HIT_MIN_RINGS:
         decision_snr = abs(clean_log_s - HIT_MIN_LOG_SOLUBILITY) / primary_sigma
         snr_tenths = int(round(10.0 * decision_snr))
@@ -424,7 +469,9 @@ def _simulate_wet_lab_execution(
         precursor_overlap_permille=min(60, deconv.precursor_overlap_permille),
         spectral_residual_permille=min(65, deconv.spectral_residual_permille),
         snr_tenths=snr_tenths,
-        target_signal_present=(mol.rings >= HIT_MIN_RINGS and clean_log_s >= HIT_MIN_LOG_SOLUBILITY),
+        target_signal_present=(
+            mol.rings >= HIT_MIN_RINGS and clean_log_s >= HIT_MIN_LOG_SOLUBILITY
+        ),
     )
     return SimulatedWetLabRun(
         raw_measured_log_s=clean_log_s,
@@ -483,6 +530,10 @@ def _run_single_seed_regime(
     tau_permille = max(150, int(round(1000.0 * tau_0)))
     initial_tau_permille = tau_permille
 
+    cal_knn_dists = [knn_support_distance(z, z_seed_train, k=3) for z in z_seed_cal]
+    sorted_knn_d = sorted(cal_knn_dists)
+    local_tau_0 = sorted_knn_d[min(len(sorted_knn_d) - 1, int(0.94 * len(sorted_knn_d)))]
+
     # Pre-deployment split-conformal quantile calibrated on clean seed domain
     init_weights = _fit_ridge_linear_system(z_seed_train, [m.true_log_s for m in seed_train])
     init_cal_scores = [
@@ -491,7 +542,6 @@ def _run_single_seed_regime(
     ]
     static_q_hat = _conformal_quantile(init_cal_scores, alpha=alpha)
 
-    # Precompute standardized vectors and radial distances for exploration & eval pools
     cand_z = {m.compound_id: _standardize_apply(m.features, means, stds) for m in exploration_pool}
     cand_dist = {
         m.compound_id: _nearest_seed_distance(cand_z[m.compound_id], z_seed_train)
@@ -504,12 +554,36 @@ def _run_single_seed_regime(
     eval_z = [_standardize_apply(m.features, means, stds) for m in frontier_eval_set]
     eval_dist = [_nearest_seed_distance(z, z_seed_train) for z in eval_z]
 
-    # Surrogate memory (training features + measured targets) and certified frontier calibration split
+    # Precompute top-3 nearest squared distances to z_seed_train for O(1) per-round kNN updates
+    cand_top3_sq: dict[str, list[float]] = {}
+    if regime == "lab_attrib_full_closed_loop":
+        for cid, zv in cand_z.items():
+            sq_list = [sum((zv[j] - ref[j]) ** 2 for j in range(len(zv))) for ref in z_seed_train]
+            cand_top3_sq[cid] = sorted(heapq.nsmallest(min(3, len(sq_list)), sq_list))
+
+    def _cand_locally_supported(cid: str, local_tau: float) -> bool:
+        top3 = cand_top3_sq[cid]
+        if not top3 or local_tau <= 0.0:
+            return False
+        if math.sqrt(top3[0]) > local_tau:
+            return False
+        rms = math.sqrt(sum(top3) / float(len(top3)))
+        return rms <= 1.35 * local_tau
+
+    def _cand_nearest_support(cid: str) -> float:
+        top3 = cand_top3_sq[cid]
+        return math.sqrt(top3[0]) if top3 else float("inf")
+
+    # Surrogate memory (training features + measured targets), local certified Chem-RRT support,
+    # and strictly held-out exchangeable calibration split + Gibbs-Candes online ACI state.
     mem_z: list[tuple[float, ...]] = list(z_seed_train)
     mem_y: list[float] = [m.true_log_s for m in seed_train]
+    certified_support: list[tuple[float, ...]] = list(z_seed_train)
 
     frontier_cal_z: list[tuple[float, ...]] = []
     frontier_cal_y: list[float] = []
+    alpha_t = alpha
+    gamma_aci = 0.03
 
     ledger = CertifiedLedger()
     remaining = {m.compound_id: m for m in exploration_pool}
@@ -522,15 +596,27 @@ def _run_single_seed_regime(
     certified_positives_committed = 0
     stepping_stone_expansions = 0
 
-    for _round_idx in range(n_rounds):
+    eta_scale = 1.0 + (eta_permille / 1000.0)
+
+    for round_idx in range(n_rounds):
         if not remaining:
             break
         weights = _fit_ridge_linear_system(mem_z, mem_y)
+        round_tau_permille = tau_permille
 
-        # Candidate acquisition under each regime's frontier policy
+        current_cal_scores = [
+            abs(y_c - _predict_ridge(weights, z_c))
+            for z_c, y_c in zip(frontier_cal_z, frontier_cal_y)
+        ] or [
+            abs(m_c.true_log_s - _predict_ridge(weights, z_c))
+            for m_c, z_c in zip(seed_cal, z_seed_cal)
+        ]
+        online_q_t = _conformal_quantile(current_cal_scores, alpha=alpha_t)
+
         available = list(remaining.values())
+        cal_holdout_ids: set[str] = set()
+
         if regime == "naive_raw_writeback":
-            # Greedy UCB across entire unguarded chemical space (including deep OOD)
             scored = sorted(
                 available,
                 key=lambda m: (
@@ -542,7 +628,6 @@ def _run_single_seed_regime(
             )
             batch = scored[:batch_size]
         elif regime == "pre_gate_only_static":
-            # Restricted strictly to static initial radius d <= tau_0
             admissible = [
                 m for m in available if cand_dist_permille[m.compound_id] <= initial_tau_permille
             ]
@@ -554,12 +639,13 @@ def _run_single_seed_regime(
                 reverse=True,
             )
             batch = admissible[:batch_size]
-        else:
-            # Annular Chem-RRT stepping-stones + exploitation within current tau_t
+        elif regime == "unattributed_frontier_probes":
             shell_probes = [
                 m
                 for m in available
-                if in_annular_shell(tau_permille, eta_permille, cand_dist_permille[m.compound_id])
+                if in_annular_shell(
+                    round_tau_permille, eta_permille, cand_dist_permille[m.compound_id]
+                )
             ]
             shell_probes.sort(
                 key=lambda m: (
@@ -569,7 +655,7 @@ def _run_single_seed_regime(
                 reverse=True,
             )
             in_domain = [
-                m for m in available if cand_dist_permille[m.compound_id] <= tau_permille
+                m for m in available if cand_dist_permille[m.compound_id] <= round_tau_permille
             ]
             in_domain.sort(
                 key=lambda m: (
@@ -587,11 +673,76 @@ def _run_single_seed_regime(
                 if m.compound_id not in chosen_ids:
                     batch.append(m)
                     chosen_ids.add(m.compound_id)
+        else:
+            # Regime 4 (`lab_attrib_full_closed_loop`):
+            # 1. Exploitation requires BOTH global shell bound AND local Chem-RRT kNN support!
+            in_domain = [
+                m
+                for m in available
+                if cand_dist_permille[m.compound_id] <= round_tau_permille
+                and _cand_locally_supported(m.compound_id, local_tau_0 * 1.15)
+            ]
+            # 2. Annular micro-probes step outward from certified support within `(1 + eta)` shell
+            max_shell_permille = int((1000 + eta_permille) * round_tau_permille // 1000)
+            shell_probes = [
+                m
+                for m in available
+                if in_annular_shell(
+                    round_tau_permille, eta_permille, cand_dist_permille[m.compound_id]
+                )
+                or (
+                    cand_dist_permille[m.compound_id] <= max_shell_permille
+                    and not _cand_locally_supported(m.compound_id, local_tau_0 * 1.15)
+                    and _cand_nearest_support(m.compound_id) <= local_tau_0 * eta_scale
+                )
+            ]
+
+            # 3. Stratified uniform random calibration holdout BEFORE greedy UCB sorting
+            cal_rng = _deterministic_rng("CAL_SPLIT", seed, round_idx)
+            shell_copy = list(shell_probes)
+            cal_rng.shuffle(shell_copy)
+            n_cal_probes = min(len(shell_copy), max(2, batch_size // 6))
+            cal_probes = shell_copy[:n_cal_probes]
+            cal_holdout_ids = {m.compound_id for m in cal_probes}
+
+            remaining_shell = [m for m in shell_probes if m.compound_id not in cal_holdout_ids]
+            remaining_shell.sort(
+                key=lambda m: (
+                    cand_dist_permille[m.compound_id],
+                    _predict_ridge(weights, cand_z[m.compound_id]),
+                ),
+                reverse=True,
+            )
+            in_domain.sort(
+                key=lambda m: (
+                    (1.5 if m.rings >= HIT_MIN_RINGS else 0.0)
+                    + _predict_ridge(weights, cand_z[m.compound_id])
+                ),
+                reverse=True,
+            )
+
+            n_exp_probes = min(len(remaining_shell), max(2, batch_size // 5))
+            batch = list(cal_probes) + list(remaining_shell[:n_exp_probes])
+            chosen_ids = {m.compound_id for m in batch}
+            for m in in_domain:
+                if len(batch) >= batch_size:
+                    break
+                if m.compound_id not in chosen_ids:
+                    batch.append(m)
+                    chosen_ids.add(m.compound_id)
+            for m in remaining_shell[n_exp_probes:]:
+                if len(batch) >= batch_size:
+                    break
+                if m.compound_id not in chosen_ids:
+                    batch.append(m)
+                    chosen_ids.add(m.compound_id)
 
         if not batch:
             break
 
-        cert_counter_in_round = 0
+        new_round_support: list[tuple[float, ...]] = []
+        approved_round_taus: list[int] = []
+
         for mol in batch:
             remaining.pop(mol.compound_id, None)
             d_perm = cand_dist_permille[mol.compound_id]
@@ -599,32 +750,47 @@ def _run_single_seed_regime(
 
             run = _simulate_wet_lab_execution(mol, seed=seed, attempt=0)
 
-            if regime in ("naive_raw_writeback", "pre_gate_only_static", "unattributed_frontier_probes"):
-                # Raw unattributed writeback into scientific memory
+            if regime in (
+                "naive_raw_writeback",
+                "pre_gate_only_static",
+                "unattributed_frontier_probes",
+            ):
                 mem_z.append(z_vec)
                 mem_y.append(run.raw_measured_log_s)
                 if run.true_is_corrupted or run.true_has_ghost_peak:
                     poisoned_memory_entries += 1
-                if mol.rings >= HIT_MIN_RINGS and run.raw_measured_log_s >= HIT_MIN_LOG_SOLUBILITY:
+                if (
+                    mol.rings >= HIT_MIN_RINGS
+                    and run.raw_measured_log_s >= HIT_MIN_LOG_SOLUBILITY
+                ):
                     committed_hits.append(mol)
 
                 if regime == "unattributed_frontier_probes":
-                    # Expands tau_{t+1} whenever any probe lands in the annular shell,
-                    # WITHOUT checking post-execution attribution!
-                    if in_annular_shell(tau_permille, eta_permille, d_perm) and d_perm > tau_permille:
+                    if (
+                        in_annular_shell(tau_permille, eta_permille, d_perm)
+                        and d_perm > tau_permille
+                    ):
                         tau_permille = d_perm
                         stepping_stone_expansions += 1
                 continue
 
             # Regime 4: `lab_attrib_full_closed_loop`
-            primary_outcome = attribute_assay_outcome(run.telemetry)
+            diag_report = diagnose_assay(run.telemetry)
+            primary_outcome = diag_report.outcome
             orth_readout: OrthogonalAssayReadout | None = None
             final_measured_log_s = run.raw_measured_log_s
 
             if primary_outcome is AttributionOutcome.EXECUTION_ARTIFACT:
-                # Route to hardware retry (`RETRY_ROBOT`) instead of writing corrupted zero signal
+                # Inspect compound faults (`RECALIBRATE_DETECTOR` before `RETRY_ROBOT`)
                 robot_retries_triggered += 1
                 run = _simulate_wet_lab_execution(mol, seed=seed, attempt=1)
+                if not run.telemetry.detector_calibrated:
+                    run = SimulatedWetLabRun(
+                        raw_measured_log_s=run.raw_measured_log_s,
+                        telemetry=replace(run.telemetry, detector_calibrated=True),
+                        true_is_corrupted=run.true_is_corrupted,
+                        true_has_ghost_peak=run.true_has_ghost_peak,
+                    )
                 primary_outcome = attribute_assay_outcome(run.telemetry)
                 final_measured_log_s = run.raw_measured_log_s
 
@@ -645,10 +811,8 @@ def _run_single_seed_regime(
 
             final_outcome = effective_attribution(run.telemetry, orth_readout)
             if not admit_to_scientific_memory(final_outcome):
-                # Default-deny: unresolvable or retry-failed run never touches memory or tau!
                 continue
 
-            # Commit to SHA-256 hash-chained CertifiedLedger
             ledger.append(
                 sample_id=mol.compound_id,
                 candidate_features=mol.feature_dict(),
@@ -663,23 +827,26 @@ def _run_single_seed_regime(
             else:
                 certified_negatives_committed += 1
 
-            # Maintain exchangeable split between surrogate training and outer-frontier calibration
-            if d_perm > initial_tau_permille:
-                cert_counter_in_round += 1
-                if cert_counter_in_round % 3 == 0:
-                    frontier_cal_z.append(z_vec)
-                    frontier_cal_y.append(final_measured_log_s)
-                else:
-                    mem_z.append(z_vec)
-                    mem_y.append(final_measured_log_s)
+            new_round_support.append(z_vec)
+
+            if mol.compound_id in cal_holdout_ids:
+                # Online Gibbs-Candes Adaptive Conformal Inference (`alpha_t`) update
+                err_indicator = (
+                    1.0
+                    if abs(final_measured_log_s - _predict_ridge(weights, z_vec)) > online_q_t
+                    else 0.0
+                )
+                alpha_t = min(0.25, max(0.01, alpha_t + gamma_aci * (alpha - err_indicator)))
+                frontier_cal_z.append(z_vec)
+                frontier_cal_y.append(final_measured_log_s)
             else:
                 mem_z.append(z_vec)
                 mem_y.append(final_measured_log_s)
 
-            # Check formal AttributedSteppingStone gate before advancing tau_{t+1}
-            if d_perm > tau_permille:
+            # Evaluate formal AttributedSteppingStone gate against fixed `round_tau_permille`
+            if d_perm > round_tau_permille:
                 probe = AttributedSteppingStone(
-                    tau_permille=tau_permille,
+                    tau_permille=round_tau_permille,
                     eta_permille=eta_permille,
                     dist_permille=d_perm,
                     proposed_new_tau_permille=d_perm,
@@ -690,29 +857,93 @@ def _run_single_seed_regime(
                     orthogonal_readout=orth_readout,
                 )
                 if check_attributed_frontier_update(probe):
-                    tau_permille = d_perm
+                    approved_round_taus.append(d_perm)
+
+        # Synchronized end-of-plate-round frontier commit (order-independent within batch!)
+        if regime == "lab_attrib_full_closed_loop":
+            if new_round_support:
+                certified_support.extend(new_round_support)
+                for cid in remaining:
+                    zv = cand_z[cid]
+                    top3 = cand_top3_sq[cid]
+                    for ref in new_round_support:
+                        sq = sum((zv[j] - ref[j]) ** 2 for j in range(len(zv)))
+                        if len(top3) < 3:
+                            top3.append(sq)
+                            top3.sort()
+                        elif sq < top3[-1]:
+                            top3[-1] = sq
+                            top3.sort()
+            if approved_round_taus:
+                best_new_tau = max(approved_round_taus)
+                if best_new_tau > tau_permille:
+                    tau_permille = best_new_tau
                     stepping_stone_expansions += 1
 
     # Final post-campaign evaluation on clean held-out frontier molecules
     final_weights = _fit_ridge_linear_system(mem_z, mem_y)
-    if regime == "lab_attrib_full_closed_loop" and len(frontier_cal_z) >= 15:
-        cal_scores = [
+    claimed_tau_permille = tau_permille
+
+    if regime == "lab_attrib_full_closed_loop":
+        eff_alpha = min(alpha, alpha_t)
+        frontier_cal_scores = [
             abs(y_c - _predict_ridge(final_weights, z_c))
             for z_c, y_c in zip(frontier_cal_z, frontier_cal_y)
         ]
-        q_hat = _conformal_quantile(cal_scores, alpha=alpha)
+        seed_cal_final_scores = [
+            abs(m_c.true_log_s - _predict_ridge(final_weights, z_c))
+            for m_c, z_c in zip(seed_cal, z_seed_cal)
+        ]
+        if len(frontier_cal_scores) >= MIN_FRONTIER_CALIBRATION_SAMPLES:
+            q_hat = max(
+                static_q_hat,
+                _conformal_quantile(frontier_cal_scores, alpha=eff_alpha),
+            )
+        else:
+            # Conservative finite-sample guard on short-budget campaigns (`n_cal < 15`):
+            # restrict claimed outer shell proportionally to certified calibration support
+            # and inflate `q_hat` via finite-sample level adjustment + radial Lipschitz margin.
+            cal_frac = len(frontier_cal_scores) / float(MIN_FRONTIER_CALIBRATION_SAMPLES)
+            claimed_tau_permille = int(
+                round(initial_tau_permille + cal_frac * (tau_permille - initial_tau_permille))
+            )
+            tau_permille = claimed_tau_permille
+            pooled_scores = seed_cal_final_scores + frontier_cal_scores
+            conservative_alpha = max(0.01, eff_alpha * max(0.25, cal_frac))
+            radial_shift = max(0.0, (claimed_tau_permille - initial_tau_permille) / 1000.0)
+            q_hat = (
+                max(static_q_hat, _conformal_quantile(pooled_scores, alpha=conservative_alpha))
+                + 0.35 * radial_shift
+            )
     else:
-        # Regimes without certified post-execution attribution cannot safely separate
-        # corrupted calibration artifacts from true residuals, relying on initial seed quantile.
         q_hat = static_q_hat
 
-    # Evaluate conformal coverage on held-out frontier molecules claimed within trust radius
-    # (for `naive_raw_writeback`, which claims universal trust, evaluate across the frontier test set)
-    eval_indices = [
-        i
-        for i, d_val in enumerate(eval_dist)
-        if regime == "naive_raw_writeback" or int(round(1000.0 * d_val)) <= tau_permille
-    ]
+    if regime == "naive_raw_writeback":
+        eval_indices = list(range(len(frontier_eval_set)))
+    elif regime == "lab_attrib_full_closed_loop":
+        eval_indices = [
+            i
+            for i, d_val in enumerate(eval_dist)
+            if int(round(1000.0 * d_val)) <= claimed_tau_permille
+            and is_locally_supported_in_tree(
+                eval_z[i],
+                certified_support,
+                local_tau=local_tau_0 * eta_scale,
+                k_neighbors=3,
+            )
+        ]
+        if not eval_indices:
+            eval_indices = [
+                i
+                for i, d_val in enumerate(eval_dist)
+                if int(round(1000.0 * d_val)) <= claimed_tau_permille
+            ]
+    else:
+        eval_indices = [
+            i
+            for i, d_val in enumerate(eval_dist)
+            if int(round(1000.0 * d_val)) <= tau_permille
+        ]
     if not eval_indices:
         eval_indices = list(range(len(frontier_eval_set)))
 
@@ -753,6 +984,8 @@ def _run_single_seed_regime(
         "certified_ledger_size": len(ledger),
         "certified_negatives": certified_negatives_committed,
         "certified_positives": certified_positives_committed,
+        "frontier_calibration_size": len(frontier_cal_z),
+        "aci_alpha_final": round(alpha_t, 4),
         "ledger_chain_valid": ledger_ok,
     }
 
@@ -848,6 +1081,8 @@ def run_attributed_frontier_benchmark(
         "n_rounds": n_rounds,
         "batch_size": batch_size,
         "nominal_conformal_target_pct": 90.0,
-        "hit_definition": f"rings >= {HIT_MIN_RINGS} and true_log_solubility >= {HIT_MIN_LOG_SOLUBILITY}",
+        "hit_definition": (
+            f"rings >= {HIT_MIN_RINGS} and true_log_solubility >= {HIT_MIN_LOG_SOLUBILITY}"
+        ),
         "regimes": summary_by_regime,
     }

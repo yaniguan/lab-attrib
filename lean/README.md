@@ -4,7 +4,7 @@
 
 ## Guarantees (`0 sorry`, `0 axiom`, `0 warnings`)
 
-Running `lake build` inside `lean/` machine-checks **25 formal theorems** and **14 `#guard` compile-time test assertions** across four verification layers:
+Running `lake build` inside `lean/` compiles both the `LabAttribLean` proof library and the `lab-attrib-lean` (`Main.lean`) `--batch-tsv` runtime differential oracle, machine-checking **29 formal theorems** and **16 `#guard` compile-time test assertions** across four verification layers:
 
 ### 1. 4-Way Mutually Exclusive & Exhaustive Blame Calculus
 - `outcome_exhaustive_four_way`: Proves that `attributeAssayOutcome` partitions all post-execution telemetry vectors into four mutually exclusive causal regimes (`executionArtifact`, `ambiguousCharacterization`, `certifiedNegative`, `certifiedPositive`).
@@ -26,7 +26,8 @@ Running `lake build` inside `lean/` machine-checks **25 formal theorems** and **
 ### 4. Hash-Chained Certified Scientific Ledger
 - `unattributed_entry_rejected_by_ledger`: Default-deny rejection of unattributed runs at the ledger boundary.
 - `ledgerChainValidAux_append_singleton` & `appendCertified_preserves_ledger_validity`: Inductive invariance of `LedgerValid` across arbitrary certified append sequences.
-- `ledgerChainValidAux_entries_admissible`, `ledger_entries_all_scientifically_admissible`, `tampered_prevHash_breaks_ledger_validity`: Every record in any valid ledger chain is scientifically admissible, backed by clean robotic execution, and protected against hash-chain tampering.
+- `ledgerChainValidAux_entries_admissible`, `ledger_entries_all_scientifically_admissible`, `tampered_prevHash_breaks_ledger_validity`, `tampered_entryHash_breaks_ledger_validity`, `tampered_telemetry_breaks_entry_hash`: Every record in any valid ledger chain commits full `sampleId` codepoints, all 14 `AssayTelemetry` fields, and `Option OrthogonalAssayReadout` into `computeAbstractEntryHash`, preventing telemetry or sample-ID tampering.
+- `control_drift_blocks_memory_admission` & `dual_fault_quarantines_memory`: Quantitative control-window drift (`recovery < 800`, `Z' < 0.50`, `z < 2.0`) and compound physical+analytical faults are unconditionally quarantined from scientific memory.
 
 ## Reproducing Locally
 

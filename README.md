@@ -3,7 +3,7 @@
 [![CI](https://github.com/yaniguan/lab-attrib/actions/workflows/ci.yml/badge.svg)](https://github.com/yaniguan/lab-attrib/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](pyproject.toml)
-[![Lean 4.36.0](https://img.shields.io/badge/Lean%204-v4.36.0%20(25%20theorems%2C%200%20sorry)-purple.svg)](lean/LabAttribLean.lean)
+[![Lean 4.36.0](https://img.shields.io/badge/Lean%204-v4.36.0%20(29%20theorems%2C%200%20sorry)-purple.svg)](lean/LabAttribLean.lean)
 
 > **Auto-Lab Layer**: `L4 · Post-Execution Diagnostic Gate & Certified Negative Ledger` in the [Robot AI Auto-Lab (`auto-lab`)](https://github.com/yaniguan/auto-lab) ecosystem ([Architecture & History](docs/ARCHITECTURE_AND_HISTORY.md)).
 
@@ -12,7 +12,7 @@ Existing self-driving laboratory (`SDL`) verifiers stop at **pre-execution** phy
 2. **Negative-Result Epistemic Conflation (`Sakana AI Scientist-v2` debate & `La Agente Optima` sensor faults)**: Robotic dispense slip, acoustic cavitation, missed incubation windows, or unsealed plate evaporation yield zero target signal that naive pipelines write directly into scientific memory (`assayfold`, Bayesian optimization surrogates, RLVR reward tables) as "true biochemical negative results", poisoning downstream discovery.
 3. **Uncertified Stepping-Stone Conformal Drift**: Expanding a conformal trust boundary via annular `Chem-RRT` stepping-stones ($\tau_t < d(x) \le (1 + \eta)\tau_t$) collapses if stepping-stone readouts themselves are physically corrupted or spectrally ambiguous.
 
-`lab-attrib` resolves all three failure modes as a zero-dependency-core Python 3.10+ package (`src/lab_attrib/`) paired 1-to-1 with a standalone **Lean 4.36.0 formal verification package** (`lean/LabAttribLean.lean`: **25 machine-checked theorems**, **14 `#guard` compile-time checks**, **`0 sorry`**, **`0 axiom`**, **`0 warnings`**).
+`lab-attrib` resolves all three failure modes as a zero-dependency-core Python 3.10+ package (`src/lab_attrib/`) paired 1-to-1 with a standalone **Lean 4.36.0 formal verification package & CLI oracle** (`lean/LabAttribLean.lean` + `lean/Main.lean`: **29 machine-checked theorems**, **16 `#guard` compile-time checks**, **`--batch-tsv` differential oracle**, **`0 sorry`**, **`0 axiom`**, **`0 warnings`**).
 
 ---
 
@@ -30,10 +30,10 @@ lab-attrib attribute --json
 # 3. Reproduce the 4-regime closed-loop attributed Chem-RRT benchmark
 lab-attrib benchmark --json
 
-# 4. Run Python unit & Lean parity tests (42 tests)
+# 4. Run Python unit, wire contract & Lean parity tests (67 tests)
 pytest -v
 
-# 5. Machine-check all 25 Lean 4.36.0 theorems (0 sorry, 0 axiom, 0 warnings)
+# 5. Machine-check all 29 Lean 4.36.0 theorems & build lab-attrib-lean CLI (0 sorry, 0 axiom, 0 warnings)
 cd lean && lake build
 ```
 
@@ -93,27 +93,40 @@ Created in `2026` by Yani Guan as the **15th core repository** in the [Robot AI 
 
 ---
 
+## 15-Repository Auto-Lab Wire Contract (`autolab-wire/v1`)
+
+`autolab_wire.py` (`REPO_ID = "lab-attrib"`, `LAYER = "L4"`, `SCHEMA_VERSION = "autolab-wire/v1"`) connects `lab-attrib` directly into the 15-repository [Robot AI Auto-Lab](https://github.com/yaniguan/auto-lab) closed-loop packet bus via `process_packet(packet: dict) -> dict`:
+
+- **Wire Topology**: `stepbot, lab-feet -> lab-attrib -> twinstep, labbench-posttrain, lab-decide`
+  - **Upstream Bench Execution (`L1` / `L0`)**: Consumes execution receipts and quantized bench sensor telemetry (`edge_runtime`: `dispense_error_permille`, `aspiration_clean`, `incubation_window_clean`, `seal_intact`) from [`stepbot`](https://github.com/yaniguan/stepbot) and [`lab-feet`](https://github.com/yaniguan/lab-feet), plus optional 1D multiphase diffraction/optical profiles (`xrd_mixture`: `observed`, `target_basis`, `precursor_bases`).
+  - **Post-Execution Gate (`L4`)**: Runs live Projected Coordinate Descent NNLS deconvolution (`deconvolve_spectrum`), evaluates 4-way `LabAttribLean` causal blame (`diagnose_assay`), invokes Bayesian EVOI secondary routing (`route_orthogonal_assay` -> `"Raman"` / `"LC-MS"` / `"TEM"` / `"1H-NMR"`) on `AMBIGUOUS_CHARACTERIZATION`, appends certified runs to a SHA-256 `CertifiedLedger` (`certified_ledger_entries`), and quarantines uncertified runs with `halted = True`, `halt_reason = "L4_ATTRIB_QUARANTINE"` (`trace` status `"QUARANTINE"`, bottom-up invariant `"corrupted_run_never_poisons_memory & unidentifiable_spectrum_never_certified"`).
+  - **Downstream Learning & Boundary Recalibration (`L3` / `L6` / `L0`)**: Feeds verified trajectories into [`twinstep`](https://github.com/yaniguan/twinstep) (error-twin DAG synthesis, paired with [`labfill`](https://github.com/yaniguan/labfill)), [`labbench-posttrain`](https://github.com/yaniguan/labbench-posttrain) (multiplicative anti-hack RLVR zeroing reward on `L4_ATTRIB_QUARANTINE` while admitting `admit_to_memory=True` rollouts), [`lab-decide`](https://github.com/yaniguan/lab-decide) (expanding finite-sample split-conformal calibration counts and trust thresholds strictly from `certified_ledger_entries`), and [`assayfold`](https://github.com/yaniguan/assayfold) alongside sibling stack nodes (`lab-ears`, `lab-ask-why`, `lab-automation-atlas`, `buy-or-make`, `labshift`, `lab-rehearsal`, `lab-verify`, `lab-hands`).
+
+---
+
 ## Repository Structure
 
 ```text
 lab-attrib/
 ├── .github/workflows/ci.yml              # Matrix Python (3.10, 3.11, 3.12) + Lean 4.36.0 lake build
+├── autolab_wire.py                       # 15-repo Auto-Lab wire node (`autolab-wire/v1`, Layer L4)
 ├── benchmarks/results/                   # Measured 4-regime closed-loop ESOL benchmark JSON
 ├── community_extensions/                 # Hub parity entrypoint (`run_benchmark()`)
 ├── docs/ARCHITECTURE_AND_HISTORY.md      # Full 6-section Auto-Lab architectural specification
 ├── lean/
-│   ├── LabAttribLean.lean                # 25 formal theorems + 14 #guard checks (0 sorry, 0 axiom)
-│   ├── lakefile.toml                     # Lean 4 package configuration
+│   ├── LabAttribLean.lean                # 29 formal theorems + 16 #guard checks (0 sorry, 0 axiom)
+│   ├── Main.lean                         # Compiled `lab-attrib-lean --batch-tsv` differential CLI
+│   ├── lakefile.toml                     # Lean 4 library & executable configuration
 │   ├── lean-toolchain                    # Pinned leanprover/lean4:v4.36.0
 │   └── README.md                         # Formal theorem inventory
 ├── src/lab_attrib/
 │   ├── blame.py                          # Exact Python mirror of 4-way blame & stepping-stone gates
-│   ├── xrd_deconvolve.py                 # Dual-backend NNLS precursor peak-overlap & R_wp deconvolver
+│   ├── xrd_deconvolve.py                 # Weighted active-set NNLS deconvolver + shift/baseline models
 │   ├── orthogonal_router.py              # Bayesian EVOI secondary assay router (Raman/LC-MS/NMR/TEM)
-│   ├── ledger.py                         # SHA-256 hash-chained CertifiedLedger & RLVR exporter
+│   ├── ledger.py                         # SHA-256 + Merkle + HMAC/Ed25519 CertifiedLedger & WAL
 │   ├── attributed_frontier.py            # 4-regime closed-loop Chem-RRT campaign on Delaney ESOL
 │   └── cli.py                            # `lab-attrib` CLI (`demo`, `attribute`, `benchmark`)
-└── tests/                                # 42 unit, property, numerical parity & zero-CJK tests
+└── tests/                                # 67 unit, wire-contract, numerical parity & zero-CJK tests
 ```
 
 ---
