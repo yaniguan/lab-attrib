@@ -43,6 +43,13 @@ from lab_attrib.blame import (
     OrthogonalModality,
     diagnose_assay,
 )
+from lab_attrib.deconvolution import (
+    ChimeraAnalysisResult,
+    build_pseudo_voigt_spectrum,
+    detect_msms_chimera,
+    msms_entropy_similarity,
+    spectral_entropy,
+)
 from lab_attrib.ledger import CertifiedLedger
 from lab_attrib.orthogonal_router import OrthogonalRoutingDecision, route_orthogonal_assay
 from lab_attrib.xrd_deconvolve import (
@@ -126,6 +133,11 @@ def _linear_resample(
     x0 = xs[0]
     x_end = xs[-1]
     n = len(xs)
+    src_dx = (x_end - x0) / float(max(1, n - 1))
+    tgt_dx = (float(target_grid[-1]) - float(target_grid[0])) / float(max(1, len(target_grid) - 1))
+    use_antialias_bin = tgt_dx > 2.2 * max(1e-12, src_dx)
+    half_bin = 0.5 * tgt_dx
+
     prev_q: float | None = None
     for idx, q_raw in enumerate(target_grid):
         q = _require_finite(q_raw, f"target_grid[{idx}]")
@@ -135,6 +147,12 @@ def _linear_resample(
         if q < x0 or q > x_end:
             out.append(0.0)
             continue
+        if use_antialias_bin:
+            b_lo = bisect.bisect_left(xs, q - half_bin)
+            b_hi = bisect.bisect_right(xs, q + half_bin)
+            if b_hi - b_lo >= 2:
+                out.append(max(0.0, sum(float(ys[k]) for k in range(b_lo, b_hi)) / float(b_hi - b_lo)))
+                continue
         hi = bisect.bisect_right(xs, q)
         if hi <= 0:
             out.append(max(0.0, float(ys[0])))
@@ -780,6 +798,406 @@ def _parse_xrdml_diffractogram(text: str, sample_id: str) -> DiffractogramRecord
     )
 
 
+_ATOMIC_NUMBERS: dict[str, int] = {
+    "H": 1, "He": 2, "Li": 3, "Be": 4, "B": 5, "C": 6, "N": 7, "O": 8, "F": 9, "Ne": 10,
+    "Na": 11, "Mg": 12, "Al": 13, "Si": 14, "P": 15, "S": 16, "Cl": 17, "Ar": 18,
+    "K": 19, "Ca": 20, "Sc": 21, "Ti": 22, "V": 23, "Cr": 24, "Mn": 25, "Fe": 26,
+    "Co": 27, "Ni": 28, "Cu": 29, "Zn": 30, "Ga": 31, "Ge": 32, "As": 33, "Se": 34,
+    "Br": 35, "Kr": 36, "Rb": 37, "Sr": 38, "Y": 39, "Zr": 40, "Nb": 41, "Mo": 42,
+    "Tc": 43, "Ru": 44, "Rh": 45, "Pd": 46, "Ag": 47, "Cd": 48, "In": 49, "Sn": 50,
+    "Sb": 51, "Te": 52, "I": 53, "Xe": 54, "Cs": 55, "Ba": 56, "La": 57, "Ce": 58,
+    "Pr": 59, "Nd": 60, "Sm": 62, "Eu": 63, "Gd": 64, "Tb": 65, "Dy": 66, "Ho": 67,
+    "Er": 68, "Tm": 69, "Yb": 70, "Lu": 71, "Hf": 72, "Ta": 73, "W": 74, "Re": 75,
+    "Os": 76, "Ir": 77, "Pt": 78, "Au": 79, "Hg": 80, "Tl": 81, "Pb": 82, "Bi": 83,
+    "Th": 90, "U": 92,
+}
+
+
+def _strip_cif_uncertainty(token: str) -> float:
+    cleaned = re.sub(r"\([^)]*\)", "", token.strip().strip("'\""))
+    return _require_finite(cleaned, "cif_number")
+
+
+def _extract_element_symbol(raw_symbol: str) -> str:
+    m_sym = re.match(r"^\s*([A-Z][a-z]?)", raw_symbol.strip().strip("'\""))
+    if m_sym is None:
+        return "C"
+    sym = m_sym.group(1)
+    return sym if sym in _ATOMIC_NUMBERS else sym[0]
+
+
+def _eval_symop_coord(expr: str, x: float, y: float, z: float) -> float:
+    """Safely evaluate a crystallographic affine coordinate expression like `1/2-x+y`."""
+    s = expr.replace(" ", "").lower()
+    total = 0.0
+    for term in re.findall(r"[+-]?[^+-]+", s):
+        if not term:
+            continue
+        sign = -1.0 if term[0] == "-" else 1.0
+        body = term[1:] if term[0] in "+-" else term
+        if body == "x":
+            total += sign * x
+        elif body == "y":
+            total += sign * y
+        elif body == "z":
+            total += sign * z
+        elif "/" in body:
+            num_s, den_s = body.split("/", 1)
+            total += sign * (float(num_s) / float(den_s))
+        else:
+            total += sign * float(body)
+    return total % 1.0
+
+
+def _apply_symop_xyz(op_str: str, x: float, y: float, z: float) -> tuple[float, float, float]:
+    parts = op_str.strip().strip("'\"").split(",")
+    if len(parts) != 3:
+        return (x % 1.0, y % 1.0, z % 1.0)
+    return (
+        _eval_symop_coord(parts[0], x, y, z),
+        _eval_symop_coord(parts[1], x, y, z),
+        _eval_symop_coord(parts[2], x, y, z),
+    )
+
+
+def _parse_dif_diffractogram(
+    text: str,
+    sample_id: str,
+    *,
+    render_grid: Sequence[float] | None = None,
+    fwhm_deg: float = 0.28,
+    eta: float = 0.45,
+) -> DiffractogramRecord:
+    """Parse an RRUFF / American Mineralogist `.dif` Bragg reflection table."""
+    lines = [ln.rstrip("\r\n") for ln in text.splitlines()]
+    meta: dict[str, str] = {"FORMAT": "RRUFF_DIF"}
+    for ln in lines[:12]:
+        s = ln.strip()
+        if s and "NAMES" not in meta and not s.lower().startswith("diffraction"):
+            meta["NAMES"] = s
+            break
+
+    in_table = False
+    reflections: list[tuple[float, float]] = []
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            continue
+        upper = s.upper()
+        if "2-THETA" in upper and "INTENSITY" in upper and "D-SPACING" in upper:
+            in_table = True
+            continue
+        if upper.startswith("SPACE GROUP:"):
+            meta["SPACE_GROUP"] = s.split(":", 1)[1].strip()
+            continue
+        if upper.startswith("X-RAY WAVELENGTH:"):
+            meta["WAVELENGTH_A"] = s.split(":", 1)[1].strip()
+            continue
+        if not in_table:
+            continue
+        if s.startswith("=") or "END" in upper:
+            break
+        toks = s.split()
+        if len(toks) >= 3:
+            try:
+                ang = _require_finite(toks[0], "dif_2theta")
+                inten = max(0.0, _require_finite(toks[1], "dif_intensity"))
+                reflections.append((ang, inten))
+            except ValueError:
+                continue
+
+    if not reflections:
+        raise ValueError("No valid Bragg (2-THETA, INTENSITY) reflections found in .dif file")
+
+    max_i = max(inten for _, inten in reflections) or 1.0
+    peaks = [(ang, inten / max_i, fwhm_deg, eta) for ang, inten in reflections if inten > 0.0]
+    grid = (
+        tuple(float(v) for v in render_grid)
+        if render_grid is not None
+        else tuple(round(10.0 + 0.05 * i, 4) for i in range(1401))
+    )
+    rendered = build_pseudo_voigt_spectrum(grid, peaks)
+    sid = meta.get("NAMES", sample_id)
+    return DiffractogramRecord(
+        sample_id=sid,
+        two_theta_deg=grid,
+        intensities=tuple(rendered),
+        uncertainties=None,
+        metadata=meta,
+    )
+
+
+def load_cif_diffractogram(
+    source: str | Path,
+    *,
+    grid: Sequence[float] | None = None,
+    wavelength_a: float = 1.540598,
+    min_two_theta: float = 10.0,
+    max_two_theta: float = 80.0,
+    fwhm_deg: float = 0.25,
+    eta: float = 0.45,
+) -> DiffractogramRecord:
+    """Compute kinematic Cu K-alpha powder XRD pattern directly from a `.cif` crystal structure."""
+    text, default_id = _read_text_or_path(source, "cif_structure")
+    meta: dict[str, str] = {"FORMAT": "CIF_CALCULATED_XRD"}
+    cell: dict[str, float] = {}
+    symops: list[str] = []
+    atoms: list[tuple[str, float, float, float, float]] = []
+
+    raw_lines = text.splitlines()
+    idx = 0
+    n_lines = len(raw_lines)
+    while idx < n_lines:
+        s = raw_lines[idx].strip()
+        if not s or s.startswith("#"):
+            idx += 1
+            continue
+        if s.lower().startswith("data_"):
+            meta["DATA_BLOCK"] = s[5:].strip()
+            idx += 1
+            continue
+        if s.lower() == "loop_":
+            idx += 1
+            headers: list[str] = []
+            while idx < n_lines and raw_lines[idx].strip().startswith("_"):
+                headers.append(raw_lines[idx].strip().split()[0].lower())
+                idx += 1
+            rows_tokens: list[list[str]] = []
+            while idx < n_lines:
+                row_s = raw_lines[idx].strip()
+                if not row_s or row_s.startswith("#"):
+                    idx += 1
+                    continue
+                if row_s.startswith("_") or row_s.lower() == "loop_" or row_s.lower().startswith("data_"):
+                    break
+                if row_s.startswith(";"):
+                    idx += 1
+                    while idx < n_lines and not raw_lines[idx].strip().startswith(";"):
+                        idx += 1
+                    idx += 1
+                    continue
+                toks = [
+                    m.group(1) or m.group(2) or m.group(3)
+                    for m in re.finditer(r"'([^']*)'|\"([^\"]*)\"|(\S+)", row_s)
+                ]
+                if len(toks) >= len(headers) and headers:
+                    rows_tokens.append(toks[: len(headers)])
+                idx += 1
+
+            sym_col = -1
+            for col_i, h in enumerate(headers):
+                if h in ("_symmetry_equiv_pos_as_xyz", "_space_group_symop_operation_xyz"):
+                    sym_col = col_i
+                    break
+            if sym_col >= 0:
+                for rt in rows_tokens:
+                    symops.append(rt[sym_col])
+
+            if "_atom_site_fract_x" in headers and "_atom_site_fract_y" in headers and "_atom_site_fract_z" in headers:
+                ix = headers.index("_atom_site_fract_x")
+                iy = headers.index("_atom_site_fract_y")
+                iz = headers.index("_atom_site_fract_z")
+                isym = (
+                    headers.index("_atom_site_type_symbol")
+                    if "_atom_site_type_symbol" in headers
+                    else (headers.index("_atom_site_label") if "_atom_site_label" in headers else -1)
+                )
+                iocc = headers.index("_atom_site_occupancy") if "_atom_site_occupancy" in headers else -1
+                for rt in rows_tokens:
+                    try:
+                        el = _extract_element_symbol(rt[isym]) if isym >= 0 else "Si"
+                        fx = _strip_cif_uncertainty(rt[ix])
+                        fy = _strip_cif_uncertainty(rt[iy])
+                        fz = _strip_cif_uncertainty(rt[iz])
+                        occ = _strip_cif_uncertainty(rt[iocc]) if iocc >= 0 else 1.0
+                        atoms.append((el, fx, fy, fz, max(0.0, occ)))
+                    except ValueError:
+                        continue
+            continue
+
+        if s.startswith("_"):
+            parts = [
+                m.group(1) or m.group(2) or m.group(3)
+                for m in re.finditer(r"'([^']*)'|\"([^\"]*)\"|(\S+)", s)
+            ]
+            key = parts[0].lower()
+            val: str | None = parts[1] if len(parts) >= 2 else None
+            if val is None and idx + 1 < n_lines:
+                nxt = raw_lines[idx + 1].strip()
+                if nxt and not nxt.startswith(("_", "loop_", "#")):
+                    val = nxt.strip("'\"")
+                    idx += 1
+            if val is not None:
+                if key in (
+                    "_cell_length_a",
+                    "_cell_length_b",
+                    "_cell_length_c",
+                    "_cell_angle_alpha",
+                    "_cell_angle_beta",
+                    "_cell_angle_gamma",
+                ):
+                    cell[key] = _strip_cif_uncertainty(val)
+                elif key in ("_chemical_formula_structural", "_chemical_formula_sum"):
+                    meta["FORMULA"] = val
+                elif key in ("_chemical_name_mineral", "_chemical_name_common"):
+                    meta["NAMES"] = val
+                elif key in (
+                    "_symmetry_space_group_name_h-m",
+                    "_space_group_name_h-m_alt",
+                ):
+                    meta["SPACE_GROUP"] = val
+        idx += 1
+
+    if len(cell) < 6 or not atoms:
+        raise ValueError("CIF missing unit-cell parameters or fractional atom sites")
+    if not symops:
+        symops = ["x, y, z"]
+
+    a_len = cell["_cell_length_a"]
+    b_len = cell["_cell_length_b"]
+    c_len = cell["_cell_length_c"]
+    alpha_r = math.radians(cell["_cell_angle_alpha"])
+    beta_r = math.radians(cell["_cell_angle_beta"])
+    gamma_r = math.radians(cell["_cell_angle_gamma"])
+
+    ca, cb, cg = math.cos(alpha_r), math.cos(beta_r), math.cos(gamma_r)
+    sa, sb, sg = math.sin(alpha_r), math.sin(beta_r), math.sin(gamma_r)
+    vol_factor = math.sqrt(max(1e-12, 1.0 - ca * ca - cb * cb - cg * cg + 2.0 * ca * cb * cg))
+    vol = a_len * b_len * c_len * vol_factor
+
+    # Reciprocal metric tensor G* components (1/d^2 = h^T G* h)
+    a_star = (b_len * c_len * sa) / vol
+    b_star = (a_len * c_len * sb) / vol
+    c_star = (a_len * b_len * sg) / vol
+    cos_a_star = (cb * cg - ca) / max(1e-12, sb * sg)
+    cos_b_star = (ca * cg - cb) / max(1e-12, sa * sg)
+    cos_g_star = (ca * cb - cg) / max(1e-12, sa * sb)
+
+    g11 = a_star * a_star
+    g22 = b_star * b_star
+    g33 = c_star * c_star
+    g12 = a_star * b_star * cos_g_star
+    g13 = a_star * c_star * cos_b_star
+    g23 = b_star * c_star * cos_a_star
+
+    # Expand asymmetric unit via space-group operations and deduplicate coincidences
+    expanded_sites: list[tuple[int, float, float, float, float]] = []
+    for el, fx, fy, fz, occ in atoms:
+        z_num = _ATOMIC_NUMBERS.get(el, 14)
+        orbit: list[tuple[float, float, float]] = []
+        for op in symops:
+            nx, ny, nz = _apply_symop_xyz(op, fx, fy, fz)
+            is_dup = False
+            for ox, oy, oz in orbit:
+                dx = abs(nx - ox)
+                dy = abs(ny - oy)
+                dz = abs(nz - oz)
+                dx = min(dx, 1.0 - dx)
+                dy = min(dy, 1.0 - dy)
+                dz = min(dz, 1.0 - dz)
+                if dx < 1e-3 and dy < 1e-3 and dz < 1e-3:
+                    is_dup = True
+                    break
+            if not is_dup:
+                orbit.append((nx, ny, nz))
+        for ox, oy, oz in orbit:
+            expanded_sites.append((z_num, ox, oy, oz, occ))
+
+    target_grid = (
+        tuple(float(v) for v in grid)
+        if grid is not None
+        else tuple(round(min_two_theta + 0.05 * i, 4) for i in range(int(round((max_two_theta - min_two_theta) / 0.05)) + 1))
+    )
+    lo_ang = max(2.0, min(target_grid[0], min_two_theta) - 2.0)
+    hi_ang = min(160.0, max(target_grid[-1], max_two_theta) + 2.0)
+    s_min = math.sin(math.radians(0.5 * lo_ang)) / wavelength_a
+    s_max = math.sin(math.radians(0.5 * hi_ang)) / wavelength_a
+    inv_d2_min = 4.0 * s_min * s_min
+    inv_d2_max = 4.0 * s_max * s_max
+
+    h_max = min(14, max(1, int(math.ceil(2.0 * s_max * a_len))))
+    k_max = min(14, max(1, int(math.ceil(2.0 * s_max * b_len))))
+    l_max = min(14, max(1, int(math.ceil(2.0 * s_max * c_len))))
+
+    binned_intensities: dict[int, tuple[float, float]] = {}
+    two_pi = 2.0 * math.pi
+
+    for h in range(-h_max, h_max + 1):
+        for k in range(-k_max, k_max + 1):
+            for l_idx in range(0, l_max + 1):
+                if h == 0 and k == 0 and l_idx == 0:
+                    continue
+                # Friedel pair symmetry |F(h,k,l)| == |F(-h,-k,-l)| halves loop work!
+                if l_idx == 0 and (h < 0 or (h == 0 and k < 0)):
+                    continue
+                mult_friedel = 2.0
+                inv_d2 = (
+                    g11 * h * h
+                    + g22 * k * k
+                    + g33 * l_idx * l_idx
+                    + 2.0 * (g12 * h * k + g13 * h * l_idx + g23 * k * l_idx)
+                )
+                if inv_d2 < inv_d2_min or inv_d2 > inv_d2_max:
+                    continue
+                sin_theta = 0.5 * wavelength_a * math.sqrt(inv_d2)
+                if sin_theta <= 1e-6 or sin_theta >= 0.9999:
+                    continue
+                theta_rad = math.asin(sin_theta)
+                two_theta = math.degrees(2.0 * theta_rad)
+                if two_theta < lo_ang or two_theta > hi_ang:
+                    continue
+
+                s_val = sin_theta / wavelength_a
+                s2 = s_val * s_val
+                form_scale = 0.42 * math.exp(-10.0 * s2) + 0.38 * math.exp(-2.8 * s2) + 0.20
+
+                re_f = 0.0
+                im_f = 0.0
+                for z_num, ox, oy, oz, occ in expanded_sites:
+                    f_atom = occ * float(z_num) * form_scale
+                    phase = two_pi * (h * ox + k * oy + l_idx * oz)
+                    re_f += f_atom * math.cos(phase)
+                    im_f += f_atom * math.sin(phase)
+                f_sq = re_f * re_f + im_f * im_f
+                if f_sq <= 1e-8:
+                    continue
+
+                cos_theta = math.cos(theta_rad)
+                cos_2theta = math.cos(2.0 * theta_rad)
+                lp = (1.0 + cos_2theta * cos_2theta) / max(1e-12, sin_theta * sin_theta * cos_theta)
+                inten = mult_friedel * lp * f_sq
+
+                bin_key = int(round(two_theta * 200.0))  # 0.005-deg binning of symmetry-equivalent reflections
+                if bin_key in binned_intensities:
+                    prev_ang, prev_i = binned_intensities[bin_key]
+                    tot_i = prev_i + inten
+                    binned_intensities[bin_key] = (
+                        (prev_ang * prev_i + two_theta * inten) / tot_i,
+                        tot_i,
+                    )
+                else:
+                    binned_intensities[bin_key] = (two_theta, inten)
+
+    if not binned_intensities:
+        raise ValueError("No Bragg reflections fell inside the requested 2-theta window")
+
+    max_inten = max(inten for _, inten in binned_intensities.values())
+    peaks = [
+        (ang, inten / max_inten, fwhm_deg, eta)
+        for ang, inten in sorted(binned_intensities.values())
+        if (inten / max_inten) >= 0.003
+    ]
+    rendered = build_pseudo_voigt_spectrum(target_grid, peaks)
+    sid = meta.get("NAMES") or meta.get("FORMULA") or meta.get("DATA_BLOCK") or default_id
+    return DiffractogramRecord(
+        sample_id=sid,
+        two_theta_deg=target_grid,
+        intensities=tuple(rendered),
+        uncertainties=None,
+        metadata=meta,
+    )
+
+
 def load_xy_diffractogram(
     source: str | Path,
     *,
@@ -787,11 +1205,24 @@ def load_xy_diffractogram(
     max_two_theta: float | None = None,
     resample_grid: Sequence[float] | None = None,
 ) -> DiffractogramRecord:
-    """Parse an XY / XYE / CSV / RRUFF `##KEY=VALUE` / PANalytical `.xrdml` powder diffractogram."""
+    """Parse an XY / XYE / CSV / RRUFF `##KEY=VALUE` / `.dif` / `.cif` / PANalytical `.xrdml` diffractogram."""
     text, default_id = _read_text_or_path(source, "xy_diffractogram")
     stripped_head = text.lstrip()
     if stripped_head.startswith("<?xml") or "<xrdMeasurements" in stripped_head[:512]:
         rec = _parse_xrdml_diffractogram(text, default_id)
+    elif "2-THETA" in text[:2048].upper() and "D-SPACING" in text[:2048].upper():
+        rec = _parse_dif_diffractogram(text, default_id, render_grid=resample_grid)
+        if resample_grid is not None:
+            return rec
+    elif "_cell_length_a" in text[:4096] and "_atom_site_fract_x" in text:
+        lo_c = 10.0 if min_two_theta is None else float(min_two_theta)
+        hi_c = 80.0 if max_two_theta is None else float(max_two_theta)
+        return load_cif_diffractogram(
+            source,
+            grid=resample_grid,
+            min_two_theta=lo_c,
+            max_two_theta=hi_c,
+        )
     else:
         meta: dict[str, str] = {}
         points: dict[float, tuple[float, float | None]] = {}
@@ -916,13 +1347,141 @@ class RamanSpectrumRecord:
         return _linear_resample(self.wavenumber_cm1, self.intensities, target_grid)
 
 
+def _parse_rod_cif_raman(text: str, default_id: str) -> RamanSpectrumRecord:
+    """Parse a public-domain Raman Open Database (`.rod` CIF 2.0) experimental Raman spectrum."""
+    meta: dict[str, str] = {"FORMAT": "ROD_CIF_RAMAN"}
+    points: dict[float, float] = {}
+    raw_lines = text.splitlines()
+    idx = 0
+    n_lines = len(raw_lines)
+
+    while idx < n_lines:
+        s = raw_lines[idx].strip()
+        if not s or s.startswith("#"):
+            idx += 1
+            continue
+        if s.lower().startswith("data_"):
+            meta["ROD_ID"] = s[5:].strip()
+            idx += 1
+            continue
+        if s.startswith(";"):
+            idx += 1
+            while idx < n_lines and not raw_lines[idx].strip().startswith(";"):
+                idx += 1
+            idx += 1
+            continue
+        if s.lower() == "loop_":
+            idx += 1
+            headers: list[str] = []
+            while idx < n_lines and raw_lines[idx].strip().startswith("_"):
+                headers.append(raw_lines[idx].strip().split()[0].lower())
+                idx += 1
+            has_raman = (
+                "_raman_spectrum.raman_shift" in headers
+                and "_raman_spectrum.intensity" in headers
+            )
+            ix = headers.index("_raman_spectrum.raman_shift") if has_raman else -1
+            iy = headers.index("_raman_spectrum.intensity") if has_raman else -1
+            while idx < n_lines:
+                row_s = raw_lines[idx].strip()
+                if not row_s or row_s.startswith("#"):
+                    idx += 1
+                    continue
+                if row_s.startswith("_") or row_s.lower() == "loop_" or row_s.lower().startswith("data_"):
+                    break
+                if row_s.startswith(";"):
+                    idx += 1
+                    while idx < n_lines and not raw_lines[idx].strip().startswith(";"):
+                        idx += 1
+                    idx += 1
+                    continue
+                if has_raman:
+                    toks = row_s.split()
+                    if len(toks) >= len(headers):
+                        try:
+                            xv = _strip_cif_uncertainty(toks[ix])
+                            yv = _strip_cif_uncertainty(toks[iy])
+                            points[xv] = max(0.0, yv)
+                        except ValueError:
+                            pass
+                idx += 1
+            continue
+
+        if s.startswith("_"):
+            parts = [
+                m.group(1) or m.group(2) or m.group(3)
+                for m in re.finditer(r"'([^']*)'|\"([^\"]*)\"|(\S+)", s)
+            ]
+            key = parts[0].lower()
+            val = parts[1] if len(parts) >= 2 else None
+            if val is not None:
+                if key == "_chemical_name_mineral":
+                    meta["NAMES"] = val
+                elif key == "_chemical_compound_source":
+                    meta["RRUFFID"] = val
+                elif key == "_chemical_formula_sum":
+                    meta["FORMULA"] = val
+                elif key == "_cod_database_code":
+                    meta["COD_ID"] = val
+        idx += 1
+
+    sorted_wn = sorted(points)
+    if len(sorted_wn) < 2:
+        raise ValueError("ROD CIF Raman file missing >=2 (_raman_spectrum.raman_shift, intensity) points")
+    sid = meta.get("RRUFFID") or meta.get("NAMES") or meta.get("ROD_ID") or default_id
+    return RamanSpectrumRecord(
+        sample_id=sid,
+        wavenumber_cm1=tuple(sorted_wn),
+        intensities=tuple(points[w] for w in sorted_wn),
+        metadata=meta,
+    )
+
+
+def raman_to_jcamp_dx(record: RamanSpectrumRecord, *, title: str | None = None) -> str:
+    """Serialize a `RamanSpectrumRecord` as a standard `JCAMP-DX=5.01` `.jdx` text document."""
+    if len(record.wavenumber_cm1) < 2:
+        raise ValueError("RamanSpectrumRecord must contain at least 2 points")
+    eff_title = title or record.sample_id
+    lines = [
+        f"##TITLE={eff_title}",
+        "##JCAMP-DX=5.01",
+        "##DATA TYPE=RAMAN SPECTRUM",
+        "##XUNITS=1/CM",
+        "##YUNITS=RELATIVE INTENSITY",
+        "##XFACTOR=1.0",
+        "##YFACTOR=1.0",
+        f"##FIRSTX={record.wavenumber_cm1[0]:.4f}",
+        f"##LASTX={record.wavenumber_cm1[-1]:.4f}",
+        f"##NPOINTS={len(record.wavenumber_cm1)}",
+    ]
+    for mk in ("NAMES", "RRUFFID", "FORMULA", "ROD_ID"):
+        if mk in record.metadata:
+            lines.append(f"##${mk}={record.metadata[mk]}")
+    lines.append("##XYPOINTS=(XY..XY)")
+    for xv, yv in zip(record.wavenumber_cm1, record.intensities):
+        lines.append(f"{xv:.4f}, {yv:.6f}")
+    lines.append("##END=")
+    return "\n".join(lines) + "\n"
+
+
 def load_raman_spectrum(
     source: str | Path,
     *,
     resample_grid: Sequence[float] | None = None,
 ) -> RamanSpectrumRecord:
-    """Parse a JCAMP-DX (`##XYDATA` / `##XYPOINTS` / RRUFF) or CSV/ASCII Raman spectrum."""
+    """Parse a JCAMP-DX (`##XYDATA` / `##XYPOINTS` / RRUFF), ROD `.rod` CIF, or CSV Raman spectrum."""
     text, default_id = _read_text_or_path(source, "raman_spectrum")
+    if "_raman_spectrum.raman_shift" in text:
+        rec = _parse_rod_cif_raman(text, default_id)
+        if resample_grid is not None:
+            resampled = rec.resample(resample_grid)
+            return RamanSpectrumRecord(
+                sample_id=rec.sample_id,
+                wavenumber_cm1=tuple(float(v) for v in resample_grid),
+                intensities=tuple(resampled),
+                metadata=rec.metadata,
+            )
+        return rec
     meta: dict[str, str] = {}
     in_xydata_multi_y = False
     points: dict[float, float] = {}
@@ -1309,13 +1868,36 @@ def evaluate_msms_orthogonal_readout(
     mz_tolerance_da: float = 0.02,
     precursor_tolerance_da: float = 0.05,
     min_confirm_cosine: float = 0.70,
+    min_confirm_similarity: float | None = None,
+    similarity_metric: Literal["cosine", "entropy", "weighted_entropy"] = "cosine",
     noise_floor_rel: float = 0.02,
     interferent_reference: MassSpecRecord | None = None,
+    candidate_pool: Sequence[MassSpecRecord] = (),
+    isolation_window_da: float = 1.0,
 ) -> OrthogonalAssayReadout:
     """Evaluate a `MassSpecGym` LC-MS/MS readout into a Lean-verified `OrthogonalAssayReadout`."""
-    cos_target = msms_cosine_similarity(
-        observed, target_reference, mz_tolerance_da=mz_tolerance_da
+    if similarity_metric == "cosine":
+        sim_target = msms_cosine_similarity(
+            observed, target_reference, mz_tolerance_da=mz_tolerance_da
+        )
+    elif similarity_metric in ("entropy", "weighted_entropy"):
+        sim_target = msms_entropy_similarity(
+            observed,
+            target_reference,
+            mz_tolerance_da=mz_tolerance_da,
+            weighted=(similarity_metric == "weighted_entropy"),
+        )
+    else:
+        raise ValueError(
+            f"similarity_metric must be 'cosine', 'entropy', or 'weighted_entropy', got {similarity_metric!r}"
+        )
+
+    eff_threshold = (
+        float(min_confirm_similarity)
+        if min_confirm_similarity is not None
+        else float(min_confirm_cosine)
     )
+
     precursor_match = True
     if observed.precursor_mz is not None and target_reference.precursor_mz is not None:
         precursor_match = (
@@ -1323,7 +1905,7 @@ def evaluate_msms_orthogonal_readout(
         )
 
     selectivity_clean = True
-    if interferent_reference is not None:
+    if interferent_reference is not None and similarity_metric == "cosine" and not candidate_pool:
         cos_interferent = msms_cosine_similarity(
             observed, interferent_reference, mz_tolerance_da=mz_tolerance_da
         )
@@ -1331,10 +1913,23 @@ def evaluate_msms_orthogonal_readout(
         if (
             observed.precursor_mz is not None
             and interferent_reference.precursor_mz is not None
-            and abs(observed.precursor_mz - interferent_reference.precursor_mz) <= precursor_tolerance_da
+            and abs(observed.precursor_mz - interferent_reference.precursor_mz)
+            <= max(precursor_tolerance_da, isolation_window_da)
             and cos_interferent > 0.55
-            and cos_target > 0.45
+            and sim_target > 0.45
         ):
+            selectivity_clean = False
+    elif interferent_reference is not None or candidate_pool:
+        chimera_res: ChimeraAnalysisResult = detect_msms_chimera(
+            observed,
+            target_reference,
+            interferent_reference=interferent_reference,
+            candidate_pool=candidate_pool,
+            mz_tolerance_da=mz_tolerance_da,
+            isolation_window_da=max(precursor_tolerance_da, isolation_window_da),
+            weighted=(similarity_metric != "entropy"),
+        )
+        if chimera_res.is_chimera:
             selectivity_clean = False
 
     signal_rms = math.sqrt(sum(v * v for v in observed.intensities) / max(1, len(observed.intensities)))
@@ -1342,7 +1937,7 @@ def evaluate_msms_orthogonal_readout(
     confirmed = bool(
         selectivity_clean
         and precursor_match
-        and cos_target >= min_confirm_cosine
+        and sim_target >= eff_threshold
         and snr_tenths >= MIN_RESOLVABLE_SNR_TENTHS
     )
     return OrthogonalAssayReadout(

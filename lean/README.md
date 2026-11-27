@@ -2,9 +2,9 @@
 
 `LabAttribLean` (`lean/LabAttribLean.lean`) is a standalone, zero-dependency **Lean 4.36.0** formalization of the post-execution causal blame calculus, secondary orthogonal-assay resolution, attributed annular `Chem-RRT` frontier expansion, and hash-chained proof-carrying scientific ledger implemented in `src/lab_attrib/`.
 
-## Guarantees (`0 sorry`, `0 axiom`, `0 warnings`)
+## Guarantees (`0 sorry`, `no custom axioms`, `0 warnings`)
 
-Running `lake build` inside `lean/` compiles both the `LabAttribLean` proof library and the `lab-attrib-lean` (`Main.lean`) `--batch-tsv` runtime differential oracle, machine-checking **29 formal theorems** and **16 `#guard` compile-time test assertions** across four verification layers:
+Running `lake build` and `lake env lean CheckAxioms.lean` inside `lean/` compiles both the `LabAttribLean` proof library and the `lab-attrib-lean` (`Main.lean`) `--batch-tsv` runtime differential oracle, machine-checking **30 formal theorems** and **16 `#guard` compile-time test assertions** across four verification layers with **`0 sorry`** (`zero sorryAx`) and **no custom axioms** (depending exclusively on Lean 4's standard foundational axioms `propext`, `Classical.choice`, and `Quot.sound`):
 
 ### 1. 4-Way Mutually Exclusive & Exhaustive Blame Calculus
 - `outcome_exhaustive_four_way`: Proves that `attributeAssayOutcome` partitions all post-execution telemetry vectors into four mutually exclusive causal regimes (`executionArtifact`, `ambiguousCharacterization`, `certifiedNegative`, `certifiedPositive`).

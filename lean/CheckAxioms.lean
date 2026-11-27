@@ -1,0 +1,41 @@
+import LabAttribLean
+
+/-!
+# Automated Lean 4 Kernel Axiom Audit for `LabAttribLean`
+
+Prints the exact transitive kernel axiom footprint of every theorem in `LabAttribLean.lean`.
+Verified in CI (`scripts/check_lean_axioms.py`) to depend strictly on Lean's standard
+foundational axioms (`propext`, `Classical.choice`, `Quot.sound`) with zero `sorryAx`
+and zero custom axioms.
+-/
+
+#print axioms LabAttribLean.outcome_exhaustive_four_way
+#print axioms LabAttribLean.corrupted_run_never_poisons_memory
+#print axioms LabAttribLean.hardware_fault_disjunction_never_poisons_memory
+#print axioms LabAttribLean.control_drift_blocks_memory_admission
+#print axioms LabAttribLean.dual_fault_quarantines_memory
+#print axioms LabAttribLean.unidentifiable_spectrum_never_certified
+#print axioms LabAttribLean.certified_negative_sound
+#print axioms LabAttribLean.certified_positive_sound
+#print axioms LabAttribLean.admit_iff_exec_clean_and_identifiable
+#print axioms LabAttribLean.execution_artifact_routes_to_hardware_retry
+#print axioms LabAttribLean.ambiguous_routes_to_orthogonal_assay
+#print axioms LabAttribLean.orthogonal_confirm_promotes_certified_positive
+#print axioms LabAttribLean.orthogonal_refute_promotes_certified_negative
+#print axioms LabAttribLean.unconfirmed_orthogonal_never_admitted
+#print axioms LabAttribLean.orthogonal_cannot_launder_corrupted_execution
+#print axioms LabAttribLean.effectiveAttribution_admissible_iff
+#print axioms LabAttribLean.effectiveAttribution_admissible_outcomes
+#print axioms LabAttribLean.deep_ood_stepping_stone_blocked
+#print axioms LabAttribLean.corrupted_probe_never_expands_tau
+#print axioms LabAttribLean.ambiguous_probe_never_expands_tau
+#print axioms LabAttribLean.exceeding_micro_volume_blocks_tau_expansion
+#print axioms LabAttribLean.valid_tau_expansion_requires_certified_micro_probe
+#print axioms LabAttribLean.unattributed_entry_rejected_by_ledger
+#print axioms LabAttribLean.ledgerChainValidAux_append_singleton
+#print axioms LabAttribLean.appendCertified_preserves_ledger_validity
+#print axioms LabAttribLean.ledgerChainValidAux_entries_admissible
+#print axioms LabAttribLean.ledger_entries_all_scientifically_admissible
+#print axioms LabAttribLean.tampered_prevHash_breaks_ledger_validity
+#print axioms LabAttribLean.tampered_entryHash_breaks_ledger_validity
+#print axioms LabAttribLean.tampered_telemetry_breaks_entry_hash

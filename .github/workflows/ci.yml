@@ -51,9 +51,11 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - name: Build LabAttribLean and lab-attrib-lean CLI (zero sorry, zero warnings)
+      - name: Build LabAttribLean and lab-attrib-lean CLI (zero sorry, no custom axioms, zero warnings)
         working-directory: lean
         run: lake build
+      - name: Audit #print axioms across all 30 LabAttribLean theorems
+        run: python scripts/check_lean_axioms.py
       - name: Run compiled Lean --batch-tsv vs Python runtime parity suite
         env:
           LAB_ATTRIB_REQUIRE_LEAN_BIN: "1"

@@ -392,3 +392,151 @@ def test_issue7_stateless_multi_turn_wire_packets_preserve_prev_hash_continuity(
         stateless_2["attribution"]["ledger_entry_sha256"]
         == stateful_2["attribution"]["ledger_entry_sha256"]
     )
+
+
+
+# --- Hardened Fail-Closed Telemetry & Schema Validation (`L4_ATTRIB_SCHEMA_REJECT`) ---
+
+
+@pytest.mark.parametrize(
+    ("bad_packet", "desc"),
+    [
+        (
+            {
+                "run_id": "bool-string-trap",
+                "candidate_smiles": "CCO",
+                "edge_runtime": {"dispense_error_permille": 10, "aspiration_clean": "false"},
+            },
+            "non-boolean string 'false' in aspiration_clean must not coerce to True",
+        ),
+        (
+            {
+                "run_id": "bool-int-trap",
+                "candidate_smiles": "CCO",
+                "telemetry_override": {"seal_intact": 1},
+            },
+            "integer 1 in seal_intact bool field must fail closed",
+        ),
+        (
+            {
+                "run_id": "int-bool-trap",
+                "candidate_smiles": "CCO",
+                "edge_runtime": {"dispense_error_permille": True},
+            },
+            "boolean True in dispense_error_permille int field must not fall back to default 12",
+        ),
+        (
+            {
+                "run_id": "int-float-trap",
+                "candidate_smiles": "CCO",
+                "edge_runtime": {"dispense_error_permille": 12.7},
+            },
+            "fractional float in dispense_error_permille int field must fail closed",
+        ),
+        (
+            {
+                "run_id": "int-neg-trap",
+                "candidate_smiles": "CCO",
+                "edge_runtime": {"dispense_error_permille": -25},
+            },
+            "negative dispense_error_permille must not clamp to 0",
+        ),
+        (
+            {
+                "run_id": "int-nan-str-trap",
+                "candidate_smiles": "CCO",
+                "telemetry_override": {"snr_tenths": "not_an_int"},
+            },
+            "non-numeric string in snr_tenths must not raise unhandled ValueError",
+        ),
+        (
+            {
+                "run_id": "nan-measured-val",
+                "candidate_smiles": "CCO",
+                "edge_runtime": {"dispense_error_permille": 10},
+                "measured_value": float("nan"),
+            },
+            "NaN measured_value must fail closed without raising",
+        ),
+        (
+            {
+                "run_id": "bad-edge-container",
+                "candidate_smiles": "CCO",
+                "edge_runtime": "corrupted_payload",
+            },
+            "non-mapping edge_runtime must not default to clean execution",
+        ),
+        (
+            {
+                "run_id": "bad-sample-phase",
+                "candidate_smiles": "CCO",
+                "sample_phase": "supercritical_plasma",
+                "telemetry_override": {"precursor_overlap_permille": 500},
+            },
+            "unknown sample_phase must fail closed rather than falling back to solution",
+        ),
+        (
+            {
+                "run_id": "bad-prior-prob",
+                "candidate_smiles": "CCO",
+                "prior_hit_prob": 1.45,
+                "telemetry_override": {"precursor_overlap_permille": 500},
+            },
+            "out-of-range prior_hit_prob > 1.0 must fail closed",
+        ),
+        (
+            {
+                "run_id": "bad-orthogonal-readout",
+                "candidate_smiles": "CCO",
+                "telemetry_override": {"precursor_overlap_permille": 500},
+                "orthogonal_readout": {
+                    "modality": "Raman",
+                    "instrument_calibrated": "false",
+                    "orthogonal_snr_tenths": 85,
+                    "selectivity_clean": True,
+                    "target_confirmed": True,
+                },
+            },
+            "non-bool instrument_calibrated in orthogonal_readout must fail closed",
+        ),
+        (
+            {
+                "run_id": "bad-xrd-mixture",
+                "candidate_smiles": "CCO",
+                "xrd_mixture": {
+                    "observed": [float("nan"), 1.0, 0.5],
+                    "target_basis": [0.2, 1.0, 0.4],
+                },
+            },
+            "NaN inside xrd_mixture.observed must fail closed without raising ValueError",
+        ),
+        (
+            {
+                "run_id": "bad-halted-flag",
+                "candidate_smiles": "CCO",
+                "halted": "false",
+                "edge_runtime": {"dispense_error_permille": 10},
+            },
+            "string 'false' in halted flag must fail closed",
+        ),
+    ],
+)
+def test_malformed_telemetry_and_envelope_fields_fail_closed_schema_reject(
+    bad_packet: dict[str, Any],
+    desc: str,
+) -> None:
+    out = autolab_wire.process_packet(bad_packet)
+    assert out["halted"] is True, desc
+    assert out["halt_reason"] == "L4_ATTRIB_SCHEMA_REJECT", desc
+    assert out["attribution"]["admit_to_memory"] is False, desc
+    assert out["attribution"]["schema_valid"] is False, desc
+    assert out["attribution"]["ledger_entry_sha256"] is None, desc
+    assert out["certified_ledger_entries"] == [], desc
+    assert out["trace"][-1]["status"] == "REJECT", desc
+
+
+def test_non_mapping_root_packet_fails_closed_without_raising() -> None:
+    out = autolab_wire.process_packet(["not", "a", "dict"])  # type: ignore[arg-type]
+    assert out["halted"] is True
+    assert out["halt_reason"] == "L4_ATTRIB_SCHEMA_REJECT"
+    assert out["attribution"]["admit_to_memory"] is False
