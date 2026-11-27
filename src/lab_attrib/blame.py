@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
+import numbers
 from typing import Any
 
 # Exact integer permille / tenths thresholds mirrored 1-to-1 with `lean/LabAttribLean.lean`
@@ -150,24 +151,36 @@ class AssayTelemetry:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AssayTelemetry:
+        def _req_int(key: str, default: Any = None, *, has_default: bool = False) -> int:
+            raw = data.get(key, default) if has_default else data[key]
+            if isinstance(raw, bool) or not isinstance(raw, numbers.Integral):
+                raise ValueError(f"{key} must be an integer, got {raw!r}")
+            return int(raw)
+
+        def _req_bool(key: str) -> bool:
+            raw = data[key]
+            if not isinstance(raw, bool) and type(raw).__name__ != "bool_":
+                raise ValueError(f"{key} must be a bool, got {raw!r}")
+            return bool(raw)
+
         return cls(
-            dispense_error_permille=int(data["dispense_error_permille"]),
-            aspiration_clean=bool(data["aspiration_clean"]),
-            incubation_window_clean=bool(data["incubation_window_clean"]),
-            seal_intact=bool(data["seal_intact"]),
-            positive_control_passed=bool(data["positive_control_passed"]),
-            blank_uncontaminated=bool(data["blank_uncontaminated"]),
-            detector_calibrated=bool(data["detector_calibrated"]),
-            precursor_overlap_permille=int(data["precursor_overlap_permille"]),
-            spectral_residual_permille=int(data["spectral_residual_permille"]),
-            snr_tenths=int(data["snr_tenths"]),
-            target_signal_present=bool(data["target_signal_present"]),
-            positive_control_recovery_permille=int(
-                data.get("positive_control_recovery_permille", 1000)
+            dispense_error_permille=_req_int("dispense_error_permille"),
+            aspiration_clean=_req_bool("aspiration_clean"),
+            incubation_window_clean=_req_bool("incubation_window_clean"),
+            seal_intact=_req_bool("seal_intact"),
+            positive_control_passed=_req_bool("positive_control_passed"),
+            blank_uncontaminated=_req_bool("blank_uncontaminated"),
+            detector_calibrated=_req_bool("detector_calibrated"),
+            precursor_overlap_permille=_req_int("precursor_overlap_permille"),
+            spectral_residual_permille=_req_int("spectral_residual_permille"),
+            snr_tenths=_req_int("snr_tenths"),
+            target_signal_present=_req_bool("target_signal_present"),
+            positive_control_recovery_permille=_req_int(
+                "positive_control_recovery_permille", 1000, has_default=True
             ),
-            plate_z_prime_tenths=int(data.get("plate_z_prime_tenths", 70)),
-            positive_control_zscore_tenths=int(
-                data.get("positive_control_zscore_tenths", 50)
+            plate_z_prime_tenths=_req_int("plate_z_prime_tenths", 70, has_default=True),
+            positive_control_zscore_tenths=_req_int(
+                "positive_control_zscore_tenths", 50, has_default=True
             ),
         )
 
@@ -209,12 +222,24 @@ class OrthogonalAssayReadout:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> OrthogonalAssayReadout:
+        raw_snr = data["orthogonal_snr_tenths"]
+        if isinstance(raw_snr, bool) or not isinstance(raw_snr, numbers.Integral):
+            raise ValueError(
+                f"orthogonal_snr_tenths must be a non-negative integer, got {raw_snr!r}"
+            )
+
+        def _req_bool(key: str) -> bool:
+            raw = data[key]
+            if not isinstance(raw, bool) and type(raw).__name__ != "bool_":
+                raise ValueError(f"{key} must be a bool, got {raw!r}")
+            return bool(raw)
+
         return cls(
             modality=OrthogonalModality(data["modality"]),
-            instrument_calibrated=bool(data["instrument_calibrated"]),
-            orthogonal_snr_tenths=int(data["orthogonal_snr_tenths"]),
-            selectivity_clean=bool(data["selectivity_clean"]),
-            target_confirmed=bool(data["target_confirmed"]),
+            instrument_calibrated=_req_bool("instrument_calibrated"),
+            orthogonal_snr_tenths=int(raw_snr),
+            selectivity_clean=_req_bool("selectivity_clean"),
+            target_confirmed=_req_bool("target_confirmed"),
         )
 
 

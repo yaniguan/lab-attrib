@@ -578,6 +578,11 @@ def deconvolve_spectrum(
     max_strain_scale: float = 0.0,
     background_poly_degree: int | None = None,
     max_background_ratio: float = 5.0,
+    l1_alpha: float = 0.0,
+    l2_alpha: float = 0.0,
+    pseudo_voigt_fwhm_add: float = 0.0,
+    pseudo_voigt_eta: float = 0.5,
+    shift_search_mode: str = "dictionary",
     tol: float = 1e-10,
     max_iter: int = 2000,
     use_numpy: bool | None = None,
@@ -648,6 +653,10 @@ def deconvolve_spectrum(
     shift_deg_val = _require_finite_float(max_peak_shift_deg, "max_peak_shift_deg")
     strain_val = _require_finite_float(max_strain_scale, "max_strain_scale")
     max_bg_ratio = _require_finite_float(max_background_ratio, "max_background_ratio")
+    l1_val = _require_finite_float(l1_alpha, "l1_alpha")
+    l2_val = _require_finite_float(l2_alpha, "l2_alpha")
+    pv_fwhm_val = _require_finite_float(pseudo_voigt_fwhm_add, "pseudo_voigt_fwhm_add")
+    pv_eta_val = _require_finite_float(pseudo_voigt_eta, "pseudo_voigt_eta")
 
     if min_hit_amp <= 0.0:
         raise ValueError("min_hit_amplitude must be positive")
@@ -663,6 +672,16 @@ def deconvolve_spectrum(
         raise ValueError("max_peak_shift_deg must be non-negative")
     if strain_val < 0.0:
         raise ValueError("max_strain_scale must be non-negative")
+    if l1_val < 0.0:
+        raise ValueError("l1_alpha must be non-negative")
+    if l2_val < 0.0:
+        raise ValueError("l2_alpha must be non-negative")
+    if pv_fwhm_val < 0.0:
+        raise ValueError("pseudo_voigt_fwhm_add must be non-negative")
+    if not (0.0 <= pv_eta_val <= 1.0):
+        raise ValueError("pseudo_voigt_eta must lie in [0, 1]")
+    if shift_search_mode not in ("dictionary", "golden_section"):
+        raise ValueError("shift_search_mode must be 'dictionary' or 'golden_section'")
     if background_poly_degree is not None:
         if (
             isinstance(background_poly_degree, bool)
@@ -710,6 +729,50 @@ def deconvolve_spectrum(
 
     dx_mean = (grid_x[-1] - grid_x[0]) / float(m - 1)
     effective_shift_bound = max(shift_deg_val, float(allow_peak_shift_bins) * dx_mean)
+
+    if shift_search_mode == "golden_section":
+        from lab_attrib.deconvolution import deconvolve_frontier_spectrum
+
+        fwhm_cands = (0.0, pv_fwhm_val) if pv_fwhm_val > 0.0 else (0.0, 0.16, 0.34, 0.55)
+        return deconvolve_frontier_spectrum(
+            y,
+            prec_cols,
+            s_target,
+            two_theta_grid=grid_x,
+            max_peak_shift_deg=effective_shift_bound,
+            broadening_fwhm_candidates=fwhm_cands,
+            pseudo_voigt_eta=pv_eta_val,
+            background_poly_degree=background_poly_degree,
+            l1_alpha=(l1_val if l1_val > 0.0 else None),
+            min_hit_amplitude=min_hit_amp,
+            noise_sigma=sigma_val,
+            naive_cosine_threshold=naive_thresh,
+            weights=w_profile,
+            use_numpy=use_numpy,
+        )
+
+    if pv_fwhm_val > 0.0:
+        from lab_attrib.deconvolution import convolve_pseudo_voigt_broadening
+
+        broadened_precs: list[list[float]] = []
+        for p_col in prec_cols:
+            p_max = max(p_col)
+            conv_p = convolve_pseudo_voigt_broadening(
+                p_col, grid_x, fwhm_add=pv_fwhm_val, eta=pv_eta_val
+            )
+            c_max = max(conv_p)
+            scale_p = (p_max / c_max) if (p_max > 1e-15 and c_max > 1e-15) else 1.0
+            broadened_precs.append([v * scale_p for v in conv_p])
+        prec_cols = broadened_precs
+
+        t_max = max(s_target)
+        conv_t = convolve_pseudo_voigt_broadening(
+            s_target, grid_x, fwhm_add=pv_fwhm_val, eta=pv_eta_val
+        )
+        ct_max = max(conv_t)
+        scale_t = (t_max / ct_max) if (t_max > 1e-15 and ct_max > 1e-15) else 1.0
+        s_target = [v * scale_t for v in conv_t]
+        target_norm = math.sqrt(sum(v * v for v in s_target))
 
     # Collinearity condition diagnostic across precursor and target reference bases
     s_unit_unshifted = [v / target_norm for v in s_target]
@@ -768,7 +831,27 @@ def deconvolve_spectrum(
     if run_np and _np is None:  # pragma: no cover
         raise RuntimeError("use_numpy=True requested, but numpy is not installed")
 
-    if run_np:
+    if l1_val > 0.0 or l2_val > 0.0:
+        from lab_attrib.deconvolution import elastic_nnls
+
+        n_phase_cols = bg_start
+        n_bg_cols = bg_end - bg_start
+        l1_per_col = [l1_val] * n_phase_cols + [0.0] * n_bg_cols
+        l2_per_col = [l2_val] * n_phase_cols + [0.0] * n_bg_cols
+        el_res = elastic_nnls(
+            design_cols,
+            y,
+            l1_alpha=l1_per_col,
+            l2_alpha=l2_per_col,
+            sample_weights=w_profile,
+            tol=tol_val,
+            max_iter=max_iter,
+            use_numpy=run_np,
+        )
+        coeff = list(el_res.weights)
+        kkt_viol = el_res.kkt_max_violation
+        iters = el_res.iterations
+    elif run_np:
         coeff, _, kkt_viol, iters = _solve_nnls_numpy(
             weighted_cols, y_weighted, tol=tol_val, max_iter=max_iter
         )

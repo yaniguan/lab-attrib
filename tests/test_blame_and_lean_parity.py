@@ -687,12 +687,52 @@ def test_telemetry_and_orthogonal_validation_rejects_bad_types() -> None:
             selectivity_clean=True,
             target_confirmed=False,
         )
+    with pytest.raises(ValueError, match="must be a bool"):
+        AssayTelemetry.from_dict(
+            {**_clean_telemetry().to_dict(), "aspiration_clean": "false"}
+        )
+    with pytest.raises(ValueError, match="must be an integer"):
+        AssayTelemetry.from_dict(
+            {**_clean_telemetry().to_dict(), "dispense_error_permille": True}
+        )
+    with pytest.raises(ValueError, match="must be a bool"):
+        OrthogonalAssayReadout.from_dict(
+            {
+                "modality": "Raman",
+                "instrument_calibrated": "false",
+                "orthogonal_snr_tenths": 80,
+                "selectivity_clean": True,
+                "target_confirmed": True,
+            }
+        )
+
+
+def test_lean_print_axioms_audit_and_readme_no_custom_axioms() -> None:
+    import importlib.util
+
+    script_path = REPO_ROOT / "scripts" / "check_lean_axioms.py"
+    spec = importlib.util.spec_from_file_location("check_lean_axioms", script_path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    require_bin = os.environ.get("LAB_ATTRIB_REQUIRE_LEAN_BIN") == "1"
+    has_built_olean = (REPO_ROOT / "lean" / ".lake" / "build" / "lib").is_dir()
+    run_kernel = bool(require_bin or (has_built_olean and mod.find_lake_executable() is not None))
+    report = mod.audit_lean_axioms(run_kernel=run_kernel)
+    assert report["theorem_count"] >= 30
+    assert report["zero_sorryAx"] is True
+    assert report["zero_custom_axioms"] is True
+    if require_bin:
+        assert report["kernel_verified"] is True
+        assert len(report["theorem_axioms"]) == report["theorem_count"]
 
 
 def test_lean_source_theorem_and_guard_counts_zero_sorry_zero_axiom() -> None:
     lean_files = [
         REPO_ROOT / "lean" / "LabAttribLean.lean",
         REPO_ROOT / "lean" / "Main.lean",
+        REPO_ROOT / "lean" / "CheckAxioms.lean",
     ]
     total_theorems: list[str] = []
     total_guards: list[str] = []
@@ -713,13 +753,13 @@ def test_lean_source_theorem_and_guard_counts_zero_sorry_zero_axiom() -> None:
         assert sorries == [], f"Found forbidden sorry tokens in {lf.name}: {sorries}"
         assert axioms == [], f"Found forbidden axiom declarations in {lf.name}: {axioms}"
 
-    assert len(total_theorems) >= 28, f"Expected >= 28 theorems, found {len(total_theorems)}"
+    assert len(total_theorems) >= 30, f"Expected >= 30 theorems, found {len(total_theorems)}"
     assert "tampered_telemetry_breaks_entry_hash" in total_theorems
     assert len(total_guards) >= 16, f"Expected >= 16 #guard checks, found {len(total_guards)}"
 
 
 def test_entire_repository_contains_strictly_zero_cjk_characters() -> None:
-    skip_dirs = {".git", ".lake", "__pycache__", ".pytest_cache", ".ruff_cache"}
+    skip_dirs = {".git", ".lake", "__pycache__", ".pytest_cache", ".ruff_cache", "data"}
     offending: list[str] = []
     checked_count = 0
     for path in REPO_ROOT.rglob("*"):

@@ -3,7 +3,7 @@
 [![CI](https://github.com/yaniguan/lab-attrib/actions/workflows/ci.yml/badge.svg)](https://github.com/yaniguan/lab-attrib/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](pyproject.toml)
-[![Lean 4.36.0](https://img.shields.io/badge/Lean%204-v4.36.0%20(29%20theorems%2C%200%20sorry)-purple.svg)](lean/LabAttribLean.lean)
+[![Lean 4.36.0](https://img.shields.io/badge/Lean%204-v4.36.0%20(30%20theorems%2C%200%20sorry)-purple.svg)](lean/LabAttribLean.lean)
 
 > **Auto-Lab Layer**: `L4 · Post-Execution Diagnostic Gate & Certified Negative Ledger` in the [Robot AI Auto-Lab (`auto-lab`)](https://github.com/yaniguan/auto-lab) ecosystem ([Architecture & History](docs/ARCHITECTURE_AND_HISTORY.md)).
 
@@ -12,7 +12,7 @@ Existing self-driving laboratory (`SDL`) verifiers stop at **pre-execution** phy
 2. **Negative-Result Epistemic Conflation (`Sakana AI Scientist-v2` debate & `La Agente Optima` sensor faults)**: Robotic dispense slip, acoustic cavitation, missed incubation windows, or unsealed plate evaporation yield zero target signal that naive pipelines write directly into scientific memory (`assayfold`, Bayesian optimization surrogates, RLVR reward tables) as "true biochemical negative results", poisoning downstream discovery.
 3. **Uncertified Stepping-Stone Conformal Drift**: Expanding a conformal trust boundary via annular `Chem-RRT` stepping-stones ($\tau_t < d(x) \le (1 + \eta)\tau_t$) collapses if stepping-stone readouts themselves are physically corrupted or spectrally ambiguous.
 
-`lab-attrib` resolves all three failure modes as a zero-dependency-core Python 3.10+ package (`src/lab_attrib/`) paired 1-to-1 with a standalone **Lean 4.36.0 formal verification package & CLI oracle** (`lean/LabAttribLean.lean` + `lean/Main.lean`: **29 machine-checked theorems**, **16 `#guard` compile-time checks**, **`--batch-tsv` differential oracle**, **`0 sorry`**, **`0 axiom`**, **`0 warnings`**).
+`lab-attrib` resolves all three failure modes as a zero-dependency-core Python 3.10+ package (`src/lab_attrib/`) paired 1-to-1 with a standalone **Lean 4.36.0 formal verification package & CLI oracle** (`lean/LabAttribLean.lean` + `lean/Main.lean` + `lean/CheckAxioms.lean`: **30 machine-checked theorems**, **16 `#guard` compile-time checks**, **`--batch-tsv` differential oracle**, **`0 sorry`**, **`no custom axioms`**, **`0 warnings`**).
 
 ---
 
@@ -30,18 +30,19 @@ lab-attrib attribute --json
 # 3. Inspect the 9 open characterization/synthesis datasets & run the mineral XRD+Raman benchmark
 lab-attrib datasets --benchmark-panel
 
-# 4. Optionally fetch live spectral/solubility samples into gitignored data/open_datasets/
+# 4. Fetch & benchmark SHA-256-pinned real A-Lab GPSS, RRUFF/DARA, ROD Raman & MassSpecGym spectra
+python scripts/benchmark_real_spectra.py
 python scripts/fetch_open_spectra.py --verify-urls
-python scripts/fetch_open_spectra.py --dataset rruff_powder_xrd --dataset alab_gpss_solid_state
 
 # 5. Reproduce the 4-regime closed-loop attributed Chem-RRT benchmark (Delaney ESOL or AqSolDB)
 lab-attrib benchmark --json
 
-# 6. Run Python unit, open-dataset parser, wire contract & Lean parity tests (75 tests)
+# 6. Run Python unit, real-spectra drift, wire contract & Lean parity tests
 pytest -v
 
-# 7. Machine-check all 29 Lean 4.36.0 theorems & build lab-attrib-lean CLI (0 sorry, 0 axiom, 0 warnings)
-cd lean && lake build
+# 7. Machine-check all 30 Lean 4.36.0 theorems & audit #print axioms (0 sorry, no custom axioms)
+cd lean && lake build && cd ..
+python scripts/check_lean_axioms.py
 ```
 
 ---
@@ -88,9 +89,22 @@ flowchart LR
 ### 3. Model
 `lab-attrib` is purely algorithmic, symbolic, and optimization-grounded (training **no neural weights**):
 1. **4-Way Blame Calculus (`src/lab_attrib/blame.py`, `lean/LabAttribLean.lean`)**: Exact integer-permille predicates `execution_clean` (`dispense_error <= 50`, clean aspiration, clean incubation window, intact seal, passed positive & blank controls) and `characterization_identifiable` (`detector_calibrated`, `precursor_overlap <= 150`, `spectral_residual <= 100`, `snr_tenths >= 30`) partitioning every run into `EXECUTION_ARTIFACT`, `AMBIGUOUS_CHARACTERIZATION`, `CERTIFIED_NEGATIVE`, or `CERTIFIED_POSITIVE`.
-2. **Projected Coordinate Descent NNLS Deconvolver (`src/lab_attrib/xrd_deconvolve.py`)**: Decomposes $y \approx \sum_{j=1}^K c_j p_j + \beta s_{\mathrm{target}}$ ($c_j \ge 0, \beta \ge 0$) to KKT tolerance $10^{-10}$ using either `numpy` or a zero-dependency pure-Python stdlib solver (`< 1e-8` parity), emitting `precursor_overlap_permille` and `spectral_residual_permille` ($R_{\mathrm{wp}}$).
+2. **Shift-Tolerant Pseudo-Voigt `L1-NNLS` Deconvolver & MS/MS Spectral Entropy Engine (`src/lab_attrib/deconvolution.py`, `src/lab_attrib/xrd_deconvolve.py`)**: Upgrades multiphase phase attribution beyond rigid fixed-grid Gaussian NNLS with coarse-grid + continuous Golden-Section `2-theta` zero-point & Vegard solid-solution lattice alignment (`+-0.35 deg`), Pseudo-Voigt Gaussian/Lorentzian peak broadening, Bernstein polynomial amorphous background subtraction, and weighted sparsity-regularized `elastic_nnls` (`L1/L2-NNLS` to KKT tolerance `<= 1e-10` in both NumPy and pure-Python stdlib, `< 1e-8` parity). For tandem MS/MS (`MassSpecGym`), pairs greedy fragment cosine with unweighted and dynamically weighted **Spectral Entropy Similarity** (Li et al., *Nature Methods* 2021) plus convex two-component mixture entropy maximization to quarantine near-isobaric co-eluting chimeras.
 3. **Bayesian EVOI Orthogonal Router (`src/lab_attrib/orthogonal_router.py`)**: Ranks secondary modalities (`Raman`, `LC-MS`, `1H-NMR`, `TEM`) by Net Expected Value of Information subject to sample volume (`uL`) and phase compatibility.
 4. **SHA-256 Proof-Carrying Ledger (`src/lab_attrib/ledger.py`)**: Append-only cryptographic chain binding sample descriptors, raw telemetry, optional orthogonal readout, `AttributionOutcome`, and `LabAttribLean` theorem tags, with full chain re-verification (`verify_chain()`).
+
+#### Measured Real vs. Controlled-Synthetic Spectroscopy Benchmark (`results/real_spectra_benchmark.json`)
+Evaluated across **51 SHA-256-pinned public experimental spectroscopy & crystal-structure files** (`scripts/benchmark_real_spectra.py`, gitignored `data/open_datasets/real_benchmark/`) spanning Ceder Group `A-Lab GPSS` PANalytical `.xrdml` scans + `352`-run summary, `RRUFF` `.dif`/`.xy` & `DARA` multi-mineral `.xrdml`/`.xy` diffractograms, `RRUFF/ROD` `.rod` + `JCAMP-DX` Raman polymorphs, and `2,417` `MassSpecGym` Orbitrap/Q-TOF tandem MS/MS spectra (`182` cross-scan queries + `24` near-isobaric chimeras), alongside a controlled `synthetic_ablation` shift/broadening sweep:
+
+<!-- BEGIN REAL_VS_SYNTHETIC_SPECTRA_TABLE -->
+| Suite ID | Modality & Corpus | `data_source` | Eval Cases | Naive FDR | Rigid NNLS / Cosine FDR | Frontier `L1-NNLS` / Entropy FDR | Baseline Recall | Frontier Recall | Baseline `Rwp` / Top-1 | Frontier `Rwp` / Top-1 |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `alab_gpss_xrd` | XRD (A-Lab GPSS .xrdml) | `real_experimental` | `8` | `50.00%` | `0.00%` | **`0.00%`** | `0.00%` | **`75.00%`** | `641.2 permille` | **`258.0 permille`** |
+| `rruff_dara_powder_xrd` | XRD (RRUFF .dif/.xy + DARA .xrdml) | `real_experimental` | `8` | `50.00%` | `48.28%` | **`6.25%`** | `100.00%` | **`100.00%`** | `649.4 permille` | **`199.6 permille`** |
+| `rruff_rod_raman` | Raman (RRUFF/ROD .rod + JCAMP-DX) | `real_experimental` | `12` | `50.00%` | `40.62%` | **`0.00%`** | `100.00%` | **`100.00%`** | `309.5 permille` | **`13.2 permille`** |
+| `massspecgym_msms` | LC-MS/MS (MassSpecGym) | `real_experimental` | `206` | `35.20%` | `28.68%` | **`12.60%`** | `51.27%` | **`66.47%`** | `69.23% Top-1` | **`82.42% Top-1`** |
+| `synthetic_controlled_ablation` | XRD Controlled Shift+Voigt Sweep | `synthetic_ablation` | `12` | `0.00%` | `50.00%` | **`0.00%`** | `100.00%` | **`100.00%`** | `739.6 permille` | **`71.1 permille`** |
+<!-- END REAL_VS_SYNTHETIC_SPECTRA_TABLE -->
 
 #### Measured 4-Regime Closed-Loop Benchmark (`benchmarks/results/lab_attrib_benchmark.json`)
 Averaged over `5` seeds (`11, 23, 37, 53, 71`) $\times$ `9` rounds $\times$ `20` assays/round on Delaney ESOL (`1,128` molecules, nominal `90.0%` conformal target):
@@ -109,7 +123,7 @@ No parametric deep learning weights are trained. Surrogate active-learning loops
 Created in `2026` by Yani Guan as the **15th core repository** in the [Robot AI Auto-Lab](https://github.com/yaniguan/auto-lab) architecture to close the post-execution causal attribution gap exposed by recent autonomous materials (`A-Lab`) and AI-scientist (`AI Scientist-v2`) debates. See [`docs/ARCHITECTURE_AND_HISTORY.md`](docs/ARCHITECTURE_AND_HISTORY.md) for the full commit and design chronicle.
 
 ### 6. Unique Properties
-- **25 Machine-Checked Lean 4.36.0 Theorems (`0 sorry`, `0 axiom`)**: Proves 4-way exhaustiveness (`outcome_exhaustive_four_way`), memory-poisoning immunity (`corrupted_run_never_poisons_memory`), `A-Lab` ghost-peak blocking (`unidentifiable_spectrum_never_certified`), certified negative/positive soundness (`certified_negative_sound`, `certified_positive_sound`), non-laundering secondary resolution (`orthogonal_cannot_launder_corrupted_execution`), attributed annular `Chem-RRT` expansion (`valid_tau_expansion_requires_certified_micro_probe`), and inductive hash-chain validity (`appendCertified_preserves_ledger_validity`, `ledger_entries_all_scientifically_admissible`).
+- **30 Machine-Checked Lean 4.36.0 Theorems (`0 sorry`, `no custom axioms`)**: Proves 4-way exhaustiveness (`outcome_exhaustive_four_way`), memory-poisoning immunity (`corrupted_run_never_poisons_memory`), `A-Lab` ghost-peak blocking (`unidentifiable_spectrum_never_certified`), certified negative/positive soundness (`certified_negative_sound`, `certified_positive_sound`), non-laundering secondary resolution (`orthogonal_cannot_launder_corrupted_execution`), attributed annular `Chem-RRT` expansion (`valid_tau_expansion_requires_certified_micro_probe`), and inductive hash-chain validity (`appendCertified_preserves_ledger_validity`, `ledger_entries_all_scientifically_admissible`), verified in CI via `#print axioms` (`lean/CheckAxioms.lean`, `scripts/check_lean_axioms.py`).
 - **Zero-Dependency Stdlib Core**: `src/lab_attrib/` requires zero third-party packages at runtime while seamlessly utilizing `numpy` acceleration when installed.
 - **Proof-Carrying Negative Results**: Elevates negative results to first-class, hash-chained scientific assets backed by verified robotic execution and statistical detection power.
 
@@ -121,8 +135,8 @@ Created in `2026` by Yani Guan as the **15th core repository** in the [Robot AI 
 
 - **Wire Topology**: `stepbot, lab-feet -> lab-attrib -> twinstep, labbench-posttrain, lab-decide`
   - **Upstream Bench Execution (`L1` / `L0`)**: Consumes execution receipts and quantized bench sensor telemetry (`edge_runtime`: `dispense_error_permille`, `aspiration_clean`, `incubation_window_clean`, `seal_intact`) from [`stepbot`](https://github.com/yaniguan/stepbot) and [`lab-feet`](https://github.com/yaniguan/lab-feet), plus optional 1D multiphase diffraction/optical profiles (`xrd_mixture`: `observed`, `target_basis`, `precursor_bases`).
-  - **Post-Execution Gate (`L4`)**: Runs live Projected Coordinate Descent NNLS deconvolution (`deconvolve_spectrum`), evaluates 4-way `LabAttribLean` causal blame (`diagnose_assay`), invokes Bayesian EVOI secondary routing (`route_orthogonal_assay` -> `"Raman"` / `"LC-MS"` / `"TEM"` / `"1H-NMR"`) on `AMBIGUOUS_CHARACTERIZATION`, appends certified runs to a SHA-256 `CertifiedLedger` (`certified_ledger_entries`), and quarantines uncertified runs with `halted = True`, `halt_reason = "L4_ATTRIB_QUARANTINE"` (`trace` status `"QUARANTINE"`, bottom-up invariant `"corrupted_run_never_poisons_memory & unidentifiable_spectrum_never_certified"`).
-  - **Downstream Learning & Boundary Recalibration (`L3` / `L6` / `L0`)**: Feeds verified trajectories into [`twinstep`](https://github.com/yaniguan/twinstep) (error-twin DAG synthesis, paired with [`labfill`](https://github.com/yaniguan/labfill)), [`labbench-posttrain`](https://github.com/yaniguan/labbench-posttrain) (multiplicative anti-hack RLVR zeroing reward on `L4_ATTRIB_QUARANTINE` while admitting `admit_to_memory=True` rollouts), [`lab-decide`](https://github.com/yaniguan/lab-decide) (expanding finite-sample split-conformal calibration counts and trust thresholds strictly from `certified_ledger_entries`), and [`assayfold`](https://github.com/yaniguan/assayfold) alongside sibling stack nodes (`lab-ears`, `lab-ask-why`, `lab-automation-atlas`, `buy-or-make`, `labshift`, `lab-rehearsal`, `lab-verify`, `lab-hands`).
+  - **Post-Execution Gate (`L4`)**: Fails closed (`L4_ATTRIB_SCHEMA_REJECT`) on malformed, non-boolean, non-integer, negative, or non-finite telemetry fields; runs live NNLS / Shift-Tolerant Pseudo-Voigt `L1-NNLS` deconvolution (`deconvolve_spectrum`), evaluates 4-way `LabAttribLean` causal blame (`diagnose_assay`), invokes Bayesian EVOI secondary routing (`route_orthogonal_assay` -> `"Raman"` / `"LC-MS"` / `"TEM"` / `"1H-NMR"`) on `AMBIGUOUS_CHARACTERIZATION`, appends certified runs to a SHA-256 `CertifiedLedger` (`certified_ledger_entries`), and quarantines uncertified runs with `halted = True`, `halt_reason = "L4_ATTRIB_QUARANTINE"` (`trace` status `"QUARANTINE"`, bottom-up invariant `"corrupted_run_never_poisons_memory & unidentifiable_spectrum_never_certified"`).
+  - **Downstream Learning & Boundary Recalibration (`L3` / `L6` / `L0`)**: Feeds verified trajectories into [`twinstep`](https://github.com/yaniguan/twinstep) (error-twin DAG synthesis, paired with [`labfill`](https://github.com/yaniguan/labfill)), [`labbench-posttrain`](https://github.com/yaniguan/labbench-posttrain) (multiplicative anti-hack RLVR zeroing reward on `L4_ATTRIB_QUARANTINE` / `L4_ATTRIB_SCHEMA_REJECT` while admitting `admit_to_memory=True` rollouts), [`lab-decide`](https://github.com/yaniguan/lab-decide) (expanding finite-sample split-conformal calibration counts and trust thresholds strictly from `certified_ledger_entries`), and [`assayfold`](https://github.com/yaniguan/assayfold) alongside sibling stack nodes (`lab-ears`, `lab-ask-why`, `lab-automation-atlas`, `buy-or-make`, `labshift`, `lab-rehearsal`, `lab-verify`, `lab-hands`).
 
 ---
 
@@ -130,28 +144,33 @@ Created in `2026` by Yani Guan as the **15th core repository** in the [Robot AI 
 
 ```text
 lab-attrib/
-├── .github/workflows/ci.yml              # Matrix Python (3.10, 3.11, 3.12) + Lean 4.36.0 lake build
-├── autolab_wire.py                       # 15-repo Auto-Lab wire node (`autolab-wire/v1`, Layer L4)
+├── .github/workflows/ci.yml              # Matrix Python (3.10, 3.11, 3.12) + Lean 4.36.0 + #print axioms
+├── autolab_wire.py                       # Fail-closed 15-repo Auto-Lab wire node (`autolab-wire/v1`, Layer L4)
 ├── benchmarks/results/                   # Measured 4-regime closed-loop ESOL benchmark JSON
+├── results/real_spectra_benchmark.json   # SHA-256-pinned real vs. synthetic spectroscopy benchmark JSON
 ├── community_extensions/                 # Hub parity entrypoint (`run_benchmark()`)
 ├── docs/ARCHITECTURE_AND_HISTORY.md      # Full 6-section Auto-Lab architectural specification
 ├── lean/
-│   ├── LabAttribLean.lean                # 29 formal theorems + 16 #guard checks (0 sorry, 0 axiom)
+│   ├── LabAttribLean.lean                # 30 formal theorems + 16 #guard checks (0 sorry, no custom axioms)
+│   ├── CheckAxioms.lean                  # Kernel `#print axioms` audit across all 30 theorems
 │   ├── Main.lean                         # Compiled `lab-attrib-lean --batch-tsv` differential CLI
 │   ├── lakefile.toml                     # Lean 4 library & executable configuration
 │   ├── lean-toolchain                    # Pinned leanprover/lean4:v4.36.0
 │   └── README.md                         # Formal theorem inventory
 ├── scripts/
+│   ├── benchmark_real_spectra.py         # Real A-Lab GPSS / RRUFF / ROD Raman / MassSpecGym benchmark
+│   ├── check_lean_axioms.py              # CI verifier for `#print axioms` & `no custom axioms`
 │   └── fetch_open_spectra.py             # On-demand spectral/solubility downloader & live URL verifier
 ├── src/lab_attrib/
 │   ├── blame.py                          # Exact Python mirror of 4-way blame & stepping-stone gates
+│   ├── deconvolution.py                  # Pseudo-Voigt L1-NNLS (`elastic_nnls`), Golden-Section shift & MS/MS entropy
 │   ├── xrd_deconvolve.py                 # Weighted active-set NNLS deconvolver + shift/baseline models
 │   ├── orthogonal_router.py              # Bayesian EVOI secondary assay router (Raman/LC-MS/NMR/TEM)
 │   ├── ledger.py                         # SHA-256 + Merkle + HMAC/Ed25519 CertifiedLedger & WAL
 │   ├── attributed_frontier.py            # 4-regime closed-loop Chem-RRT campaign on ESOL & AqSolDB
-│   ├── open_datasets.py                  # 9-dataset open registry, mineral panel & multi-modal parsers
+│   ├── open_datasets.py                  # 9-dataset open registry, CIF/DIF/ROD/JCAMP parsers & mineral panel
 │   └── cli.py                            # `lab-attrib` CLI (`demo`, `attribute`, `benchmark`, `datasets`)
-└── tests/                                # 75 unit, open-dataset, wire-contract, parity & zero-CJK tests
+└── tests/                                # Unit, frontier deconvolution, README drift, wire & Lean parity tests
 ```
 
 ---
@@ -159,11 +178,12 @@ lab-attrib/
 ## Scientific References & Motivation
 1. Szymanski, N. J. et al. *An autonomous laboratory for the accelerated synthesis of novel materials* (`A-Lab`), **Nature** 624, 86–91 (2023); Ceder Group `alab_gpss_public` & Zenodo DOI `10.5281/zenodo.19396297` (2026).
 2. Cheetham, A. K. & Seshadri, R. *Artificial intelligence driving materials discovery? Perspective on the article: An autonomous laboratory for the accelerated synthesis of novel materials*, **Chemistry of Materials** 36, 3490–3495 (2024) — documenting precursor diffraction peak overlap and phase-identification pitfalls in autonomous XRD pipelines.
-3. Lawson, C. L. & Hanson, R. J. *Solving Least Squares Problems*, **SIAM** (1995) — active-set and non-negative least squares (`NNLS`) foundations.
-4. Lafuente, B. et al. *The power of databases: The RRUFF project*, in *Highlights in Mineralogical Crystallography*, **De Gruyter**, 1–30 (2015); Grazulis, S. et al. *Crystallography Open Database (`COD`)*, **Nucleic Acids Research** 40, D420–D427 (2012).
-5. Bushuiev, R. et al. *MassSpecGym: A benchmark for the discovery and identification of molecules*, **NeurIPS** (2024); Sorkun, M. C., Khetan, A. & Er, S. *AqSolDB, a curated reference set of aqueous solubility and 2D descriptors for a diverse set of compounds*, **Scientific Data** 6, 143 (2019).
-6. Delaney, J. S. *ESOL: Estimating aqueous solubility directly from molecular structure*, **Journal of Chemical Information and Computer Sciences** 44, 1000–1005 (2004).
-7. Vovk, V., Gammerman, A. & Shafer, G. *Algorithmic Learning in a Random World*, **Springer** (2005); Angelopoulos, A. N. & Bates, S. *Conformal prediction: A gentle introduction*, **Foundations and Trends in Machine Learning** (2023).
+3. Li, Y. et al. *Spectral entropy outperforms MS/MS dot product similarity for small-molecule compound identification*, **Nature Methods** 18, 1524–1531 (2021) — unweighted and low-entropy dynamically weighted MS/MS spectral entropy similarity.
+4. Lawson, C. L. & Hanson, R. J. *Solving Least Squares Problems*, **SIAM** (1995) — active-set and non-negative least squares (`NNLS`) foundations.
+5. Lafuente, B. et al. *The power of databases: The RRUFF project*, in *Highlights in Mineralogical Crystallography*, **De Gruyter**, 1–30 (2015); Grazulis, S. et al. *Crystallography Open Database (`COD`)*, **Nucleic Acids Research** 40, D420–D427 (2012).
+6. Bushuiev, R. et al. *MassSpecGym: A benchmark for the discovery and identification of molecules*, **NeurIPS** (2024); Sorkun, M. C., Khetan, A. & Er, S. *AqSolDB, a curated reference set of aqueous solubility and 2D descriptors for a diverse set of compounds*, **Scientific Data** 6, 143 (2019).
+7. Delaney, J. S. *ESOL: Estimating aqueous solubility directly from molecular structure*, **Journal of Chemical Information and Computer Sciences** 44, 1000–1005 (2004).
+8. Vovk, V., Gammerman, A. & Shafer, G. *Algorithmic Learning in a Random World*, **Springer** (2005); Angelopoulos, A. N. & Bates, S. *Conformal prediction: A gentle introduction*, **Foundations and Trends in Machine Learning** (2023).
 
 ## License
 MIT License — Copyright (c) 2026 Yani Guan. See [`LICENSE`](LICENSE).

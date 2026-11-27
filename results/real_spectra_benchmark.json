@@ -1,0 +1,869 @@
+{
+  "benchmark_schema": "lab-attrib-real-spectra/v1",
+  "primary_data_source": "real_experimental",
+  "real_experimental_suites_executed": true,
+  "pinned_asset_count": 51,
+  "sha256_all_verified": true,
+  "summary_rows": [
+    {
+      "suite_id": "alab_gpss_xrd",
+      "modality": "XRD (A-Lab GPSS .xrdml)",
+      "data_source": "real_experimental",
+      "n_eval_cases": 8,
+      "naive_fdr_pct": 50.0,
+      "baseline_nnls_or_cosine_fdr_pct": 0.0,
+      "frontier_fdr_pct": 0.0,
+      "baseline_recall_pct": 0.0,
+      "frontier_recall_pct": 75.0,
+      "baseline_rwp_or_top1": "641.2 permille",
+      "frontier_rwp_or_top1": "258.0 permille"
+    },
+    {
+      "suite_id": "rruff_dara_powder_xrd",
+      "modality": "XRD (RRUFF .dif/.xy + DARA .xrdml)",
+      "data_source": "real_experimental",
+      "n_eval_cases": 8,
+      "naive_fdr_pct": 50.0,
+      "baseline_nnls_or_cosine_fdr_pct": 48.28,
+      "frontier_fdr_pct": 6.25,
+      "baseline_recall_pct": 100.0,
+      "frontier_recall_pct": 100.0,
+      "baseline_rwp_or_top1": "649.4 permille",
+      "frontier_rwp_or_top1": "199.6 permille"
+    },
+    {
+      "suite_id": "rruff_rod_raman",
+      "modality": "Raman (RRUFF/ROD .rod + JCAMP-DX)",
+      "data_source": "real_experimental",
+      "n_eval_cases": 12,
+      "naive_fdr_pct": 50.0,
+      "baseline_nnls_or_cosine_fdr_pct": 40.62,
+      "frontier_fdr_pct": 0.0,
+      "baseline_recall_pct": 100.0,
+      "frontier_recall_pct": 100.0,
+      "baseline_rwp_or_top1": "309.5 permille",
+      "frontier_rwp_or_top1": "13.2 permille"
+    },
+    {
+      "suite_id": "massspecgym_msms",
+      "modality": "LC-MS/MS (MassSpecGym)",
+      "data_source": "real_experimental",
+      "n_eval_cases": 206,
+      "naive_fdr_pct": 35.2,
+      "baseline_nnls_or_cosine_fdr_pct": 28.68,
+      "frontier_fdr_pct": 12.6,
+      "baseline_recall_pct": 51.27,
+      "frontier_recall_pct": 66.47,
+      "baseline_rwp_or_top1": "69.23% Top-1",
+      "frontier_rwp_or_top1": "82.42% Top-1"
+    },
+    {
+      "suite_id": "synthetic_controlled_ablation",
+      "modality": "XRD Controlled Shift+Voigt Sweep",
+      "data_source": "synthetic_ablation",
+      "n_eval_cases": 12,
+      "naive_fdr_pct": 0.0,
+      "baseline_nnls_or_cosine_fdr_pct": 50.0,
+      "frontier_fdr_pct": 0.0,
+      "baseline_recall_pct": 100.0,
+      "frontier_recall_pct": 100.0,
+      "baseline_rwp_or_top1": "739.6 permille",
+      "frontier_rwp_or_top1": "71.1 permille"
+    }
+  ],
+  "suites": {
+    "alab_gpss_xrd": {
+      "suite_id": "alab_gpss_xrd",
+      "modality": "XRD",
+      "data_source": "real_experimental",
+      "dataset_id": "alab_gpss_solid_state",
+      "n_xrdml_scans_evaluated": 8,
+      "n_summary_records_audited": 352,
+      "summary_352_certified_positive": 219,
+      "summary_352_quarantined_ambiguous": 133,
+      "methods": {
+        "naive_peak_cosine": {
+          "tp": 4,
+          "fp": 4,
+          "fn": 0,
+          "precision_pct": 50.0,
+          "recall_pct": 100.0,
+          "false_discovery_rate_pct": 50.0,
+          "mean_rwp_permille": null
+        },
+        "rigid_gaussian_nnls": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 4,
+          "precision_pct": 100.0,
+          "recall_pct": 0.0,
+          "false_discovery_rate_pct": 0.0,
+          "mean_rwp_permille": 641.2
+        },
+        "shift_voigt_l1_nnls": {
+          "tp": 3,
+          "fp": 0,
+          "fn": 1,
+          "precision_pct": 100.0,
+          "recall_pct": 75.0,
+          "false_discovery_rate_pct": 0.0,
+          "mean_rwp_permille": 258.0
+        }
+      },
+      "scans": [
+        {
+          "sample_id": "000_Li2MgCl4",
+          "ground_truth_spinel_fraction": 0.9616,
+          "is_clean_spinel_hit": true,
+          "naive_best_cosine": 0.8684,
+          "naive_claims_hit": true,
+          "rigid_rwp_permille": 694,
+          "rigid_certified_hit": false,
+          "frontier_rwp_permille": 126,
+          "frontier_precursor_overlap_permille": 102,
+          "frontier_fitted_shift_deg": 0.508,
+          "frontier_certified_hit": true,
+          "primary_blame_outcome": "AMBIGUOUS_CHARACTERIZATION"
+        },
+        {
+          "sample_id": "003_Li2Mn0.5Fe0.5Cl4",
+          "ground_truth_spinel_fraction": 1.0,
+          "is_clean_spinel_hit": true,
+          "naive_best_cosine": 0.9463,
+          "naive_claims_hit": true,
+          "rigid_rwp_permille": 799,
+          "rigid_certified_hit": false,
+          "frontier_rwp_permille": 125,
+          "frontier_precursor_overlap_permille": 74,
+          "frontier_fitted_shift_deg": 0.3323,
+          "frontier_certified_hit": true,
+          "primary_blame_outcome": "AMBIGUOUS_CHARACTERIZATION"
+        },
+        {
+          "sample_id": "006_Li2Co0.5Mn0.5Cl4",
+          "ground_truth_spinel_fraction": 1.0,
+          "is_clean_spinel_hit": true,
+          "naive_best_cosine": 0.7501,
+          "naive_claims_hit": true,
+          "rigid_rwp_permille": 660,
+          "rigid_certified_hit": false,
+          "frontier_rwp_permille": 186,
+          "frontier_precursor_overlap_permille": 316,
+          "frontier_fitted_shift_deg": 0.3371,
+          "frontier_certified_hit": false,
+          "primary_blame_outcome": "AMBIGUOUS_CHARACTERIZATION"
+        },
+        {
+          "sample_id": "007_Li2Mg0.5Mn0.5Cl4",
+          "ground_truth_spinel_fraction": 0.9405,
+          "is_clean_spinel_hit": true,
+          "naive_best_cosine": 0.8827,
+          "naive_claims_hit": true,
+          "rigid_rwp_permille": 341,
+          "rigid_certified_hit": false,
+          "frontier_rwp_permille": 140,
+          "frontier_precursor_overlap_permille": 41,
+          "frontier_fitted_shift_deg": 0.045,
+          "frontier_certified_hit": true,
+          "primary_blame_outcome": "AMBIGUOUS_CHARACTERIZATION"
+        },
+        {
+          "sample_id": "010_Li2Zn0.5Mn0.5Cl4",
+          "ground_truth_spinel_fraction": 0.5758,
+          "is_clean_spinel_hit": false,
+          "naive_best_cosine": 0.7836,
+          "naive_claims_hit": true,
+          "rigid_rwp_permille": 794,
+          "rigid_certified_hit": false,
+          "frontier_rwp_permille": 472,
+          "frontier_precursor_overlap_permille": 82,
+          "frontier_fitted_shift_deg": -0.266,
+          "frontier_certified_hit": false,
+          "primary_blame_outcome": "AMBIGUOUS_CHARACTERIZATION"
+        },
+        {
+          "sample_id": "071_Li2NiCl4",
+          "ground_truth_spinel_fraction": 0.2436,
+          "is_clean_spinel_hit": false,
+          "naive_best_cosine": 0.7065,
+          "naive_claims_hit": true,
+          "rigid_rwp_permille": 602,
+          "rigid_certified_hit": false,
+          "frontier_rwp_permille": 347,
+          "frontier_precursor_overlap_permille": 87,
+          "frontier_fitted_shift_deg": -0.55,
+          "frontier_certified_hit": false,
+          "primary_blame_outcome": "AMBIGUOUS_CHARACTERIZATION"
+        },
+        {
+          "sample_id": "099_Li1.34Fe0.78Ta0.22Cl4",
+          "ground_truth_spinel_fraction": 0.0,
+          "is_clean_spinel_hit": false,
+          "naive_best_cosine": 0.6009,
+          "naive_claims_hit": true,
+          "rigid_rwp_permille": 610,
+          "rigid_certified_hit": false,
+          "frontier_rwp_permille": 326,
+          "frontier_precursor_overlap_permille": 523,
+          "frontier_fitted_shift_deg": -0.0051,
+          "frontier_certified_hit": false,
+          "primary_blame_outcome": "AMBIGUOUS_CHARACTERIZATION"
+        },
+        {
+          "sample_id": "271_Li1.5Ni0.5Y0.25In0.25Cl4",
+          "ground_truth_spinel_fraction": 0.0,
+          "is_clean_spinel_hit": false,
+          "naive_best_cosine": 0.4584,
+          "naive_claims_hit": true,
+          "rigid_rwp_permille": 630,
+          "rigid_certified_hit": false,
+          "frontier_rwp_permille": 342,
+          "frontier_precursor_overlap_permille": 278,
+          "frontier_fitted_shift_deg": -0.0571,
+          "frontier_certified_hit": false,
+          "primary_blame_outcome": "AMBIGUOUS_CHARACTERIZATION"
+        }
+      ]
+    },
+    "rruff_dara_powder_xrd": {
+      "suite_id": "rruff_dara_powder_xrd",
+      "modality": "XRD",
+      "data_source": "real_experimental",
+      "dataset_id": "rruff_powder_xrd",
+      "n_library_phases": 12,
+      "n_eval_cases": 8,
+      "rruff_raw_xy_holder_quarantine": {
+        "sample_id": "R050048",
+        "rwp_permille": 949,
+        "outcome": "AMBIGUOUS_CHARACTERIZATION",
+        "selected_orthogonal_modality": "Raman"
+      },
+      "methods": {
+        "naive_peak_cosine": {
+          "n_cases": 8,
+          "exact_set_accuracy_pct": 37.5,
+          "precision_pct": 50.0,
+          "recall_pct": 93.33,
+          "f1_pct": 65.12,
+          "false_discovery_rate_pct": 50.0,
+          "mean_rwp_permille": 695.8
+        },
+        "rigid_gaussian_nnls": {
+          "n_cases": 8,
+          "exact_set_accuracy_pct": 12.5,
+          "precision_pct": 51.72,
+          "recall_pct": 100.0,
+          "f1_pct": 68.18,
+          "false_discovery_rate_pct": 48.28,
+          "mean_rwp_permille": 649.4
+        },
+        "shift_voigt_l1_nnls": {
+          "n_cases": 8,
+          "exact_set_accuracy_pct": 87.5,
+          "precision_pct": 93.75,
+          "recall_pct": 100.0,
+          "f1_pct": 96.77,
+          "false_discovery_rate_pct": 6.25,
+          "mean_rwp_permille": 199.6
+        }
+      },
+      "cases": [
+        {
+          "case_id": "RRUFF_Calcite_R050048_DIF",
+          "ground_truth_phases": [
+            "Calcite"
+          ],
+          "naive_detected": [
+            "Calcite"
+          ],
+          "rigid_detected": [
+            "Calcite",
+            "Zabuyelite"
+          ],
+          "rigid_rwp_permille": 653,
+          "frontier_detected": [
+            "Calcite"
+          ],
+          "frontier_rwp_permille": 145,
+          "frontier_zero_shift_deg": 0.1069
+        },
+        {
+          "case_id": "DARA_BiFeO3_Experimental_XY",
+          "ground_truth_phases": [
+            "BiFeO3"
+          ],
+          "naive_detected": [
+            "BiFeO3"
+          ],
+          "rigid_detected": [
+            "Calcite",
+            "Aragonite",
+            "Baddeleyite",
+            "Shcherbinaite",
+            "BiFeO3"
+          ],
+          "rigid_rwp_permille": 879,
+          "frontier_detected": [
+            "Halite",
+            "BiFeO3"
+          ],
+          "frontier_rwp_permille": 289,
+          "frontier_zero_shift_deg": 0.3255
+        },
+        {
+          "case_id": "DARA_TiO2_ZnO_8min_XRDML",
+          "ground_truth_phases": [
+            "Anatase",
+            "Zincite"
+          ],
+          "naive_detected": [
+            "Anatase",
+            "Halite",
+            "Zincite",
+            "Zabuyelite",
+            "BiFeO3"
+          ],
+          "rigid_detected": [
+            "Anatase",
+            "Zincite",
+            "BiFeO3"
+          ],
+          "rigid_rwp_permille": 510,
+          "frontier_detected": [
+            "Anatase",
+            "Zincite"
+          ],
+          "frontier_rwp_permille": 99,
+          "frontier_zero_shift_deg": 0.0699
+        },
+        {
+          "case_id": "DARA_Li2CO3_ZrO2_8min_XRDML",
+          "ground_truth_phases": [
+            "Baddeleyite",
+            "Zabuyelite"
+          ],
+          "naive_detected": [
+            "Halite",
+            "Zincite",
+            "Baddeleyite",
+            "Zabuyelite",
+            "Shcherbinaite",
+            "Bixbyite_In2O3",
+            "BiFeO3"
+          ],
+          "rigid_detected": [
+            "Zincite",
+            "Baddeleyite",
+            "Zabuyelite",
+            "Shcherbinaite",
+            "BiFeO3"
+          ],
+          "rigid_rwp_permille": 550,
+          "frontier_detected": [
+            "Baddeleyite",
+            "Zabuyelite"
+          ],
+          "frontier_rwp_permille": 154,
+          "frontier_zero_shift_deg": 0.1305
+        },
+        {
+          "case_id": "DARA_V2O5_TiO2_8min_XRDML",
+          "ground_truth_phases": [
+            "Anatase",
+            "Shcherbinaite"
+          ],
+          "naive_detected": [
+            "Anatase",
+            "Shcherbinaite"
+          ],
+          "rigid_detected": [
+            "Anatase",
+            "Shcherbinaite"
+          ],
+          "rigid_rwp_permille": 351,
+          "frontier_detected": [
+            "Anatase",
+            "Shcherbinaite"
+          ],
+          "frontier_rwp_permille": 232,
+          "frontier_zero_shift_deg": 0.0277
+        },
+        {
+          "case_id": "DARA_ZnO_In2O3_8min_XRDML",
+          "ground_truth_phases": [
+            "Bixbyite_In2O3",
+            "Zincite"
+          ],
+          "naive_detected": [
+            "Zabuyelite",
+            "Shcherbinaite",
+            "Bixbyite_In2O3"
+          ],
+          "rigid_detected": [
+            "Zincite",
+            "Zabuyelite",
+            "Shcherbinaite",
+            "Bixbyite_In2O3"
+          ],
+          "rigid_rwp_permille": 831,
+          "frontier_detected": [
+            "Zincite",
+            "Bixbyite_In2O3"
+          ],
+          "frontier_rwp_permille": 157,
+          "frontier_zero_shift_deg": 0.1639
+        },
+        {
+          "case_id": "Polymorph_Calcite_DIF_plus_Aragonite",
+          "ground_truth_phases": [
+            "Aragonite",
+            "Calcite"
+          ],
+          "naive_detected": [
+            "Calcite",
+            "Aragonite",
+            "Rutile"
+          ],
+          "rigid_detected": [
+            "Calcite",
+            "Aragonite",
+            "Quartz",
+            "Rutile"
+          ],
+          "rigid_rwp_permille": 792,
+          "frontier_detected": [
+            "Calcite",
+            "Aragonite"
+          ],
+          "frontier_rwp_permille": 151,
+          "frontier_zero_shift_deg": 0.1875
+        },
+        {
+          "case_id": "Polymorph_TiO2_ZnO_plus_Rutile",
+          "ground_truth_phases": [
+            "Anatase",
+            "Rutile",
+            "Zincite"
+          ],
+          "naive_detected": [
+            "Aragonite",
+            "Anatase",
+            "Rutile",
+            "Zincite",
+            "Zabuyelite",
+            "BiFeO3"
+          ],
+          "rigid_detected": [
+            "Aragonite",
+            "Anatase",
+            "Rutile",
+            "Zincite"
+          ],
+          "rigid_rwp_permille": 629,
+          "frontier_detected": [
+            "Anatase",
+            "Rutile",
+            "Zincite"
+          ],
+          "frontier_rwp_permille": 370,
+          "frontier_zero_shift_deg": 0.0633
+        }
+      ]
+    },
+    "rruff_rod_raman": {
+      "suite_id": "rruff_rod_raman",
+      "modality": "Raman",
+      "data_source": "real_experimental",
+      "dataset_id": "rruff_raman_zenodo",
+      "n_library_minerals": 9,
+      "jcamp_dx_files_verified": 10,
+      "n_eval_cases": 12,
+      "methods": {
+        "naive_peak_cosine": {
+          "n_cases": 12,
+          "exact_set_accuracy_pct": 25.0,
+          "precision_pct": 50.0,
+          "recall_pct": 100.0,
+          "f1_pct": 66.67,
+          "false_discovery_rate_pct": 50.0,
+          "mean_rwp_permille": 471.6
+        },
+        "rigid_gaussian_nnls": {
+          "n_cases": 12,
+          "exact_set_accuracy_pct": 33.33,
+          "precision_pct": 59.38,
+          "recall_pct": 100.0,
+          "f1_pct": 74.51,
+          "false_discovery_rate_pct": 40.62,
+          "mean_rwp_permille": 309.5
+        },
+        "shift_voigt_l1_nnls": {
+          "n_cases": 12,
+          "exact_set_accuracy_pct": 100.0,
+          "precision_pct": 100.0,
+          "recall_pct": 100.0,
+          "f1_pct": 100.0,
+          "false_discovery_rate_pct": 0.0,
+          "mean_rwp_permille": 13.2
+        }
+      },
+      "cases": [
+        {
+          "case_id": "Exp_Calcite_R050130",
+          "ground_truth_phases": [
+            "Calcite"
+          ],
+          "naive_detected": [
+            "Calcite",
+            "Aragonite"
+          ],
+          "rigid_detected": [
+            "Calcite",
+            "Baddeleyite"
+          ],
+          "rigid_rwp_permille": 572,
+          "frontier_detected": [
+            "Calcite"
+          ],
+          "frontier_rwp_permille": 11,
+          "frontier_shift_cm1": 2.381
+        },
+        {
+          "case_id": "Exp_Aragonite_ROD1000099",
+          "ground_truth_phases": [
+            "Aragonite"
+          ],
+          "naive_detected": [
+            "Calcite",
+            "Aragonite"
+          ],
+          "rigid_detected": [
+            "Aragonite"
+          ],
+          "rigid_rwp_permille": 409,
+          "frontier_detected": [
+            "Aragonite"
+          ],
+          "frontier_rwp_permille": 53,
+          "frontier_shift_cm1": -2.168
+        },
+        {
+          "case_id": "Exp_Anatase_ROD2100010",
+          "ground_truth_phases": [
+            "Anatase"
+          ],
+          "naive_detected": [
+            "Anatase"
+          ],
+          "rigid_detected": [
+            "Anatase",
+            "Gypsum"
+          ],
+          "rigid_rwp_permille": 244,
+          "frontier_detected": [
+            "Anatase"
+          ],
+          "frontier_rwp_permille": 16,
+          "frontier_shift_cm1": 2.59
+        },
+        {
+          "case_id": "Exp_Rutile_ROD3500024",
+          "ground_truth_phases": [
+            "Rutile"
+          ],
+          "naive_detected": [
+            "Rutile",
+            "Brookite",
+            "Quartz",
+            "Baddeleyite"
+          ],
+          "rigid_detected": [
+            "Aragonite",
+            "Anatase",
+            "Rutile",
+            "Gypsum"
+          ],
+          "rigid_rwp_permille": 134,
+          "frontier_detected": [
+            "Rutile"
+          ],
+          "frontier_rwp_permille": 0,
+          "frontier_shift_cm1": -2.0
+        },
+        {
+          "case_id": "Exp_Quartz_ROD3500025",
+          "ground_truth_phases": [
+            "Quartz"
+          ],
+          "naive_detected": [
+            "Rutile",
+            "Quartz",
+            "Baddeleyite"
+          ],
+          "rigid_detected": [
+            "Aragonite",
+            "Quartz",
+            "Baddeleyite"
+          ],
+          "rigid_rwp_permille": 307,
+          "frontier_detected": [
+            "Quartz"
+          ],
+          "frontier_rwp_permille": 1,
+          "frontier_shift_cm1": 2.497
+        },
+        {
+          "case_id": "Exp_Baddeleyite_ROD2100039",
+          "ground_truth_phases": [
+            "Baddeleyite"
+          ],
+          "naive_detected": [
+            "Rutile",
+            "Brookite",
+            "Quartz",
+            "Baddeleyite"
+          ],
+          "rigid_detected": [
+            "Rutile",
+            "Brookite",
+            "Quartz",
+            "Baddeleyite"
+          ],
+          "rigid_rwp_permille": 197,
+          "frontier_detected": [
+            "Baddeleyite"
+          ],
+          "frontier_rwp_permille": 1,
+          "frontier_shift_cm1": -2.397
+        },
+        {
+          "case_id": "Mix_Calcite_Aragonite_Polymorphs",
+          "ground_truth_phases": [
+            "Aragonite",
+            "Calcite"
+          ],
+          "naive_detected": [
+            "Calcite",
+            "Aragonite"
+          ],
+          "rigid_detected": [
+            "Calcite",
+            "Aragonite"
+          ],
+          "rigid_rwp_permille": 494,
+          "frontier_detected": [
+            "Calcite",
+            "Aragonite"
+          ],
+          "frontier_rwp_permille": 39,
+          "frontier_shift_cm1": 2.155
+        },
+        {
+          "case_id": "Mix_Anatase_Rutile_Polymorphs",
+          "ground_truth_phases": [
+            "Anatase",
+            "Rutile"
+          ],
+          "naive_detected": [
+            "Anatase",
+            "Rutile",
+            "Brookite",
+            "Baddeleyite"
+          ],
+          "rigid_detected": [
+            "Anatase",
+            "Rutile"
+          ],
+          "rigid_rwp_permille": 166,
+          "frontier_detected": [
+            "Anatase",
+            "Rutile"
+          ],
+          "frontier_rwp_permille": 7,
+          "frontier_shift_cm1": -2.312
+        },
+        {
+          "case_id": "Mix_Anatase_Brookite_Polymorphs",
+          "ground_truth_phases": [
+            "Anatase",
+            "Brookite"
+          ],
+          "naive_detected": [
+            "Anatase",
+            "Rutile",
+            "Brookite",
+            "Baddeleyite"
+          ],
+          "rigid_detected": [
+            "Anatase",
+            "Brookite",
+            "Gypsum"
+          ],
+          "rigid_rwp_permille": 220,
+          "frontier_detected": [
+            "Anatase",
+            "Brookite"
+          ],
+          "frontier_rwp_permille": 10,
+          "frontier_shift_cm1": 2.094
+        },
+        {
+          "case_id": "Mix_Calcite_Quartz",
+          "ground_truth_phases": [
+            "Calcite",
+            "Quartz"
+          ],
+          "naive_detected": [
+            "Calcite",
+            "Aragonite",
+            "Rutile",
+            "Quartz",
+            "Baddeleyite"
+          ],
+          "rigid_detected": [
+            "Calcite",
+            "Aragonite",
+            "Quartz"
+          ],
+          "rigid_rwp_permille": 346,
+          "frontier_detected": [
+            "Calcite",
+            "Quartz"
+          ],
+          "frontier_rwp_permille": 4,
+          "frontier_shift_cm1": -2.092
+        },
+        {
+          "case_id": "Mix_Gypsum_Anhydrite_Hydration",
+          "ground_truth_phases": [
+            "Anhydrite",
+            "Gypsum"
+          ],
+          "naive_detected": [
+            "Gypsum",
+            "Anhydrite"
+          ],
+          "rigid_detected": [
+            "Aragonite",
+            "Gypsum",
+            "Anhydrite"
+          ],
+          "rigid_rwp_permille": 312,
+          "frontier_detected": [
+            "Gypsum",
+            "Anhydrite"
+          ],
+          "frontier_rwp_permille": 3,
+          "frontier_shift_cm1": 2.288
+        },
+        {
+          "case_id": "Mix_Ternary_Calcite_Anatase_Quartz",
+          "ground_truth_phases": [
+            "Anatase",
+            "Calcite",
+            "Quartz"
+          ],
+          "naive_detected": [
+            "Calcite",
+            "Aragonite",
+            "Anatase",
+            "Quartz",
+            "Baddeleyite"
+          ],
+          "rigid_detected": [
+            "Calcite",
+            "Anatase",
+            "Quartz"
+          ],
+          "rigid_rwp_permille": 313,
+          "frontier_detected": [
+            "Calcite",
+            "Anatase",
+            "Quartz"
+          ],
+          "frontier_rwp_permille": 13,
+          "frontier_shift_cm1": 1.998
+        }
+      ]
+    },
+    "massspecgym_msms": {
+      "suite_id": "massspecgym_msms",
+      "modality": "LC-MS",
+      "data_source": "real_experimental",
+      "dataset_id": "massspecgym_msms",
+      "n_parsed_spectra": 2417,
+      "n_unique_molecules": 183,
+      "n_hard_cross_scan_queries": 182,
+      "n_near_isobaric_chimeras": 24,
+      "methods": {
+        "msms_cosine": {
+          "n_heldout_queries": 182,
+          "n_chimera_queries": 24,
+          "top1_accuracy_pct": 69.23,
+          "precision_pct": 64.8,
+          "recall_pct": 51.27,
+          "false_discovery_rate_pct": 35.2,
+          "chimera_quarantine_rate_pct": 16.67
+        },
+        "unweighted_spectral_entropy": {
+          "n_heldout_queries": 182,
+          "n_chimera_queries": 24,
+          "top1_accuracy_pct": 75.27,
+          "precision_pct": 71.32,
+          "recall_pct": 56.1,
+          "false_discovery_rate_pct": 28.68,
+          "chimera_quarantine_rate_pct": 20.83
+        },
+        "weighted_spectral_entropy_chimera_gate": {
+          "n_heldout_queries": 182,
+          "n_chimera_queries": 24,
+          "top1_accuracy_pct": 82.42,
+          "precision_pct": 87.4,
+          "recall_pct": 66.47,
+          "false_discovery_rate_pct": 12.6,
+          "chimera_quarantine_rate_pct": 95.83
+        }
+      }
+    },
+    "synthetic_controlled_ablation": {
+      "suite_id": "synthetic_controlled_ablation",
+      "modality": "XRD_Synthetic_Stress",
+      "data_source": "synthetic_ablation",
+      "dataset_id": "controlled_synthetic_shift_voigt_sweep",
+      "n_eval_cases": 12,
+      "shift_sweep_range_deg": [
+        -0.3,
+        0.305
+      ],
+      "methods": {
+        "naive_peak_cosine": {
+          "n_cases": 12,
+          "exact_set_accuracy_pct": 66.67,
+          "precision_pct": 100.0,
+          "recall_pct": 76.0,
+          "f1_pct": 86.36,
+          "false_discovery_rate_pct": 0.0,
+          "mean_rwp_permille": 792.8
+        },
+        "rigid_gaussian_nnls": {
+          "n_cases": 12,
+          "exact_set_accuracy_pct": 8.33,
+          "precision_pct": 50.0,
+          "recall_pct": 100.0,
+          "f1_pct": 66.67,
+          "false_discovery_rate_pct": 50.0,
+          "mean_rwp_permille": 739.6
+        },
+        "shift_voigt_l1_nnls": {
+          "n_cases": 12,
+          "exact_set_accuracy_pct": 100.0,
+          "precision_pct": 100.0,
+          "recall_pct": 100.0,
+          "f1_pct": 100.0,
+          "false_discovery_rate_pct": 0.0,
+          "mean_rwp_permille": 71.1
+        }
+      }
+    }
+  }
+}
