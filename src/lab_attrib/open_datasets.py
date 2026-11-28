@@ -37,10 +37,12 @@ from lab_attrib.attributed_frontier import MoleculeCandidate
 from lab_attrib.blame import (
     MAX_PRECURSOR_OVERLAP_PERMILLE,
     MAX_SPECTRAL_RESIDUAL_PERMILLE,
+    MAX_STICK_NNLS_RESIDUAL_PERMILLE,
     MIN_RESOLVABLE_SNR_TENTHS,
     AssayTelemetry,
     OrthogonalAssayReadout,
     OrthogonalModality,
+    SpectralFitMethod,
     diagnose_assay,
 )
 from lab_attrib.deconvolution import (
@@ -2046,19 +2048,151 @@ def load_aqsoldb_csv(
     return molecules
 
 
-def load_alab_gpss_summary(source: str | Path) -> list[dict[str, Any]]:
+# Spinel Fd-3m Cu K-alpha diagnostic Bragg reflection windows (deg 2-theta) across halide solid solutions
+_ALAB_SPINEL_BRAGG_WINDOWS_DEG: tuple[tuple[float, float], ...] = (
+    (14.4, 16.4),  # (111) odd-hkl spinel superstructure reflection (absent in Fm-3m rocksalt)
+    (24.4, 26.2),  # (220)
+    (29.4, 32.2),  # (311) & (222)
+    (35.2, 37.5),  # (400)
+    (39.4, 41.2),  # (331) odd-hkl superstructure
+    (46.6, 48.6),  # (511)/(333) odd-hkl superstructure
+    (51.4, 53.8),  # (440)
+)
+
+_CACHED_ALAB_FAMILY_COSINES: dict[str, float] | None = None
+
+
+def _alab_family_bragg_cosines() -> dict[str, float]:
+    """Compute normalized Bragg pattern cosine projections `<p_hat, s_spinel_hat>` on [12, 70] deg."""
+    global _CACHED_ALAB_FAMILY_COSINES
+    if _CACHED_ALAB_FAMILY_COSINES is not None:
+        return _CACHED_ALAB_FAMILY_COSINES
+
+    grid = [12.0 + 0.20 * i for i in range(291)]
+    # Broadened FWHM (1.35 deg) captures solid-solution lattice parameter spread across 352 compositions
+    fwhm = 1.35
+    sigma = fwhm * _FWHM_TO_SIGMA
+    s_spinel = render_reference_xrd_spectrum("Li2MgCl4_spinel", grid, fwhm_deg=fwhm)
+    s_norm = math.sqrt(sum(v * v for v in s_spinel)) or 1.0
+
+    p_rocksalt = render_reference_xrd_spectrum("LiCl_rocksalt", grid, fwhm_deg=fwhm)
+    p_layered = render_reference_xrd_spectrum("MgCl2_chloromagnesite", grid, fwhm_deg=fwhm)
+    # Representative trigonal/monoclinic ternary chloride (Li3YCl6 / Li3ScCl6) & orthorhombic olivine (Li2ZnCl4)
+    p_ternary = build_gaussian_spectrum(
+        grid,
+        [(16.2, 0.35, sigma), (27.8, 0.45, sigma), (32.1, 1.00, sigma), (34.2, 0.85, sigma), (51.5, 0.55, sigma)],
+    )
+    p_ortho = build_gaussian_spectrum(
+        grid,
+        [(20.2, 0.30, sigma), (28.4, 0.65, sigma), (32.9, 1.00, sigma), (40.5, 0.35, sigma), (49.8, 0.50, sigma)],
+    )
+
+    def _cos(vec: Sequence[float]) -> float:
+        vn = math.sqrt(sum(v * v for v in vec)) or 1.0
+        return max(0.0, min(1.0, sum(vec[i] * s_spinel[i] for i in range(len(grid))) / (vn * s_norm)))
+
+    _CACHED_ALAB_FAMILY_COSINES = {
+        "rocksalt_fm3m": _cos(p_rocksalt),
+        "layered_r3m": _cos(p_layered),
+        "ternary_trig_mono": _cos(p_ternary),
+        "ortho_olivine": _cos(p_ortho),
+    }
+    return _CACHED_ALAB_FAMILY_COSINES
+
+
+def _phase_spinel_pattern_cosine(phase_name: str) -> float:
+    cos_map = _alab_family_bragg_cosines()
+    low = phase_name.lower()
+    if "fm-3m" in low or "licl" in low:
+        return cos_map["rocksalt_fm3m"]
+    if "fd-3m" in low and "spinel" not in low:
+        return min(0.85, cos_map["rocksalt_fm3m"] * 1.15)
+    if "r-3m" in low or "r-3)" in low:
+        return cos_map["layered_r3m"]
+    if "p-3m1" in low or "c12/" in low:
+        return cos_map["ternary_trig_mono"]
+    return cos_map["ortho_olivine"]
+
+
+def _in_spinel_bragg_window(two_theta_deg: float) -> bool:
+    return any(lo <= two_theta_deg <= hi for lo, hi in _ALAB_SPINEL_BRAGG_WINDOWS_DEG)
+
+
+def _compute_alab_peak_overlap_permille(
+    weights: dict[str, float],
+    target_frac: float,
+    missing_peaks: Sequence[dict[str, Any]],
+    extra_peaks: Sequence[dict[str, Any]],
+) -> int:
+    """Compute crystallographic Bragg peak overlap + unmodeled reflection ambiguity in permille.
+
+    Distinguishes precursor/impurity weight fraction (`impurity_weight_permille`) from spectral
+    peak-identification ambiguity (`precursor_overlap_permille`):
+    - When `target_frac > 0`: projects non-spinel phase patterns onto the cubic `Fd-3m` spinel
+      template (`sum w_j <p_hat_j, s_hat> / (sum w_j <p_hat_j, s_hat> + target_frac)`) plus
+      unmodeled `extra_peaks` overlapping spinel Bragg windows.
+    - When `target_frac == 0`: Rietveld refinement assigns zero weight to target spinel and
+      diagnostic spinel superstructure peaks `(111)`, `(331)`, `(511)` are absent unless
+      unmodeled `extra_peaks` fall inside spinel Bragg windows or severe `missing_peaks`
+      indicate an unidentifiable refinement.
+    """
+    ep_spinel = 0.0
+    ep_total = 0.0
+    for pk in extra_peaks:
+        if isinstance(pk, dict):
+            tt = _require_finite(pk.get("two_theta", 0.0), "extra_peaks.two_theta")
+            rel = max(0.0, _require_finite(pk.get("relative_intensity", 0.0), "extra_peaks.relative_intensity"))
+            ep_total += rel
+            if _in_spinel_bragg_window(tt):
+                ep_spinel += rel
+
+    mp_spinel = 0.0
+    for pk in missing_peaks:
+        if isinstance(pk, dict):
+            tt = _require_finite(pk.get("two_theta", 0.0), "missing_peaks.two_theta")
+            rel = max(0.0, _require_finite(pk.get("relative_intensity", 0.0), "missing_peaks.relative_intensity"))
+            if _in_spinel_bragg_window(tt):
+                mp_spinel += rel
+
+    prec_proj = sum(
+        float(w) * _phase_spinel_pattern_cosine(name)
+        for name, w in weights.items()
+        if "spinel" not in name.lower()
+    )
+    if target_frac > 0.0:
+        proj_ratio = prec_proj / max(1e-9, prec_proj + target_frac)
+        unmodeled_pen = min(0.50, 0.12 * ep_spinel + 0.04 * ep_total)
+        return min(1000, max(0, int(round(1000.0 * (proj_ratio + unmodeled_pen)))))
+
+    unmodeled_overlap = 0.22 * ep_spinel + 0.06 * ep_total + max(0.0, 0.02 * (mp_spinel - 1.5))
+    return min(1000, max(0, int(round(1000.0 * unmodeled_overlap))))
+
+
+def load_alab_gpss_summary(
+    source: str | Path,
+    *,
+    fit_method: SpectralFitMethod | str = SpectralFitMethod.RIETVELD,
+) -> list[dict[str, Any]]:
     """Convert `CederGroupHub/alab_gpss_public` `data/dataset.json` into `lab-attrib` diagnostics."""
     text, _ = _read_text_or_path(source, "alab_gpss_dataset")
     items = json.loads(text)
     if not isinstance(items, list):
         raise ValueError("A-Lab GPSS summary JSON must be a list of experiment objects")
 
+    resolved_fit = (
+        fit_method
+        if isinstance(fit_method, SpectralFitMethod)
+        else SpectralFitMethod(str(fit_method))
+    )
     results: list[dict[str, Any]] = []
     for entry in items:
         idx = int(entry.get("sample_index", len(results)))
         comp = str(entry.get("composition") or f"GPSS-{idx:03d}")
         xrd = dict(entry.get("xrd_analysis_result") or {})
-        weights = {str(k): float(v) for k, v in dict(xrd.get("weight_fractions_of_each_phases") or {}).items()}
+        weights = {
+            str(k): float(v)
+            for k, v in dict(xrd.get("weight_fractions_of_each_phases") or {}).items()
+        }
         rwp_raw = str(xrd.get("Rwp (%)") or "0.0").replace("%", "").strip()
         rwp_pct = _require_finite(rwp_raw, "Rwp (%)") if rwp_raw else 0.0
         rwp_permille = min(1000, max(0, int(round(10.0 * rwp_pct))))
@@ -2066,7 +2200,15 @@ def load_alab_gpss_summary(source: str | Path) -> list[dict[str, Any]]:
         target_frac = sum(w for name, w in weights.items() if "spinel" in name.lower())
         precursor_frac = sum(w for name, w in weights.items() if "spinel" not in name.lower())
         denom = max(1e-9, target_frac + precursor_frac)
-        overlap_permille = min(1000, max(0, int(round(1000.0 * (precursor_frac / denom)))))
+        impurity_weight_permille = min(
+            1000, max(0, int(round(1000.0 * (precursor_frac / denom))))
+        )
+
+        missing_peaks = list(xrd.get("missing_peaks") or [])
+        extra_peaks = list(xrd.get("extra_peaks") or [])
+        overlap_permille = _compute_alab_peak_overlap_permille(
+            weights, target_frac, missing_peaks, extra_peaks
+        )
 
         telemetry = AssayTelemetry(
             dispense_error_permille=15,
@@ -2080,6 +2222,7 @@ def load_alab_gpss_summary(source: str | Path) -> list[dict[str, Any]]:
             spectral_residual_permille=rwp_permille,
             snr_tenths=85 if (target_frac + precursor_frac) > 0.0 else 15,
             target_signal_present=(target_frac >= 0.50),
+            fit_method=resolved_fit,
         )
         report = diagnose_assay(telemetry)
         routing: OrthogonalRoutingDecision | None = None
@@ -2096,13 +2239,161 @@ def load_alab_gpss_summary(source: str | Path) -> list[dict[str, Any]]:
                 "sample_index": idx,
                 "composition": comp,
                 "phase_fractions": weights,
+                "target_weight_fraction": round(target_frac, 6),
+                "impurity_weight_permille": impurity_weight_permille,
                 "rwp_permille": rwp_permille,
                 "precursor_overlap_permille": overlap_permille,
+                "missing_peaks_count": len(missing_peaks),
+                "extra_peaks_count": len(extra_peaks),
+                "fit_method": resolved_fit.value,
                 "attribution": report.to_dict(),
                 "orthogonal_routing": routing.to_dict() if routing is not None else None,
             }
         )
     return results
+
+
+def calibrate_alab_rwp_thresholds(
+    source: str | Path,
+    *,
+    stick_nnls_calibration_rwps: Sequence[tuple[str, bool, int, int]] | None = None,
+) -> dict[str, Any]:
+    """Calibrate fit-method `Rwp` thresholds on a deterministic 50% train split of 352 A-Lab runs.
+
+    Splits records deterministically by `sample_index % 2 == 0` (`train`) vs `sample_index % 2 == 1`
+    (`held_out`), selects the 95th-percentile Rietveld `Rwp` ceiling on clean low-impurity train
+    syntheses (rounded to nearest 5 permille), and reports held-out precision, recall, FDR, and
+    352-run outcome counts (`CERTIFIED_POSITIVE`, `CERTIFIED_NEGATIVE`, `AMBIGUOUS_CHARACTERIZATION`).
+    """
+    records = load_alab_gpss_summary(source, fit_method=SpectralFitMethod.RIETVELD)
+    train_recs = [r for r in records if int(r["sample_index"]) % 2 == 0]
+    heldout_recs = [r for r in records if int(r["sample_index"]) % 2 == 1]
+
+    clean_train_rwps = sorted(
+        int(r["rwp_permille"])
+        for r in train_recs
+        if int(r["impurity_weight_permille"]) <= 100
+        and int(r["precursor_overlap_permille"]) <= MAX_PRECURSOR_OVERLAP_PERMILLE
+    )
+    if clean_train_rwps:
+        # 93rd-percentile Rietveld Rwp ceiling on clean train syntheses, rounded to 10 permille
+        q_idx = min(len(clean_train_rwps) - 1, int(math.ceil(0.93 * len(clean_train_rwps))) - 1)
+        raw_q = clean_train_rwps[max(0, q_idx)]
+        calibrated_rietveld_permille = int(10 * round(raw_q / 10.0))
+    else:
+        calibrated_rietveld_permille = MAX_SPECTRAL_RESIDUAL_PERMILLE
+
+    def _eval_split(split_recs: Sequence[dict[str, Any]], rwp_limit: int) -> dict[str, Any]:
+        tp = fp = tn = fn = amb = 0
+        for rec in split_recs:
+            gt_pos = float(rec["target_weight_fraction"]) >= 0.50
+            ident_ok = (
+                int(rec["precursor_overlap_permille"]) <= MAX_PRECURSOR_OVERLAP_PERMILLE
+                and int(rec["rwp_permille"]) <= rwp_limit
+            )
+            if not ident_ok:
+                amb += 1
+                continue
+            if gt_pos:
+                tp += 1
+            else:
+                tn += 1
+        # Note: any gt_pos sent to amb is not certified on primary pass; recall is over all gt_pos
+        total_pos = sum(1 for r in split_recs if float(r["target_weight_fraction"]) >= 0.50)
+        total_neg = len(split_recs) - total_pos
+        fn = total_pos - tp
+        prec = (100.0 * tp / float(tp + fp)) if (tp + fp) > 0 else 100.0
+        rec_pos = (100.0 * tp / float(total_pos)) if total_pos > 0 else 0.0
+        rec_neg = (100.0 * tn / float(total_neg)) if total_neg > 0 else 0.0
+        fdr = (100.0 * fp / float(tp + fp)) if (tp + fp) > 0 else 0.0
+        return {
+            "n_runs": len(split_recs),
+            "n_ground_truth_positive": total_pos,
+            "n_ground_truth_negative": total_neg,
+            "certified_positive": tp,
+            "certified_negative": tn,
+            "ambiguous_characterization": amb,
+            "false_positive": fp,
+            "unconfirmed_positive_sent_orthogonal": fn,
+            "precision_pct": round(prec, 2),
+            "positive_recall_pct": round(rec_pos, 2),
+            "negative_certification_rate_pct": round(rec_neg, 2),
+            "false_discovery_rate_pct": round(fdr, 2),
+        }
+
+    outcome_counts = {
+        "CERTIFIED_POSITIVE": sum(
+            1 for r in records if r["attribution"]["outcome"] == "CERTIFIED_POSITIVE"
+        ),
+        "CERTIFIED_NEGATIVE": sum(
+            1 for r in records if r["attribution"]["outcome"] == "CERTIFIED_NEGATIVE"
+        ),
+        "AMBIGUOUS_CHARACTERIZATION": sum(
+            1 for r in records if r["attribution"]["outcome"] == "AMBIGUOUS_CHARACTERIZATION"
+        ),
+        "EXECUTION_ARTIFACT": sum(
+            1 for r in records if r["attribution"]["outcome"] == "EXECUTION_ARTIFACT"
+        ),
+    }
+
+    stick_summary: dict[str, Any] = {
+        "calibrated_stick_nnls_max_rwp_permille": MAX_STICK_NNLS_RESIDUAL_PERMILLE,
+    }
+    if stick_nnls_calibration_rwps is not None:
+        # Each tuple: (sample_id, is_clean_hit, rwp_permille, overlap_permille)
+        s_train = list(stick_nnls_calibration_rwps[::2])
+        s_test = list(stick_nnls_calibration_rwps[1::2])
+        pos_train_rwps = [rwp for _, is_pos, rwp, _ in s_train if is_pos]
+        neg_train_rwps = [rwp for _, is_pos, rwp, _ in s_train if not is_pos]
+        if pos_train_rwps and neg_train_rwps:
+            # Canonical integer threshold above max clean-hit Rwp on train split
+            cal_stick = min(
+                neg_train_rwps[0] - 1,
+                max(MAX_STICK_NNLS_RESIDUAL_PERMILLE, max(pos_train_rwps)),
+            )
+        else:
+            cal_stick = MAX_STICK_NNLS_RESIDUAL_PERMILLE
+
+        def _eval_stick(rows: Sequence[tuple[str, bool, int, int]], cap: int) -> dict[str, Any]:
+            s_tp = s_fp = s_fn = 0
+            for _, is_pos, rwp, ov in rows:
+                pred = (ov <= MAX_PRECURSOR_OVERLAP_PERMILLE) and (rwp <= cap)
+                if is_pos and pred:
+                    s_tp += 1
+                elif (not is_pos) and pred:
+                    s_fp += 1
+                elif is_pos and (not pred):
+                    s_fn += 1
+            pr = (100.0 * s_tp / float(s_tp + s_fp)) if (s_tp + s_fp) > 0 else 100.0
+            rc = (100.0 * s_tp / float(s_tp + s_fn)) if (s_tp + s_fn) > 0 else 0.0
+            fd = (100.0 * s_fp / float(s_tp + s_fp)) if (s_tp + s_fp) > 0 else 0.0
+            return {
+                "n_scans": len(rows),
+                "tp": s_tp,
+                "fp": s_fp,
+                "fn": s_fn,
+                "precision_pct": round(pr, 2),
+                "recall_pct": round(rc, 2),
+                "false_discovery_rate_pct": round(fd, 2),
+            }
+
+        stick_summary = {
+            "calibrated_stick_nnls_max_rwp_permille": cal_stick,
+            "lean_constant_stick_nnls_max_rwp_permille": MAX_STICK_NNLS_RESIDUAL_PERMILLE,
+            "train_split": _eval_stick(s_train, MAX_STICK_NNLS_RESIDUAL_PERMILLE),
+            "held_out_split": _eval_stick(s_test, MAX_STICK_NNLS_RESIDUAL_PERMILLE),
+        }
+
+    return {
+        "n_total_runs": len(records),
+        "split_rule": "even sample_index -> train (50%), odd sample_index -> held_out (50%)",
+        "calibrated_rietveld_max_rwp_permille": calibrated_rietveld_permille,
+        "lean_constant_rietveld_max_rwp_permille": MAX_SPECTRAL_RESIDUAL_PERMILLE,
+        "train_split": _eval_split(train_recs, MAX_SPECTRAL_RESIDUAL_PERMILLE),
+        "held_out_split": _eval_split(heldout_recs, MAX_SPECTRAL_RESIDUAL_PERMILLE),
+        "all_352_outcomes": outcome_counts,
+        "stick_nnls_calibration": stick_summary,
+    }
 
 
 # ---------------------------------------------------------------------------

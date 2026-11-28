@@ -20,12 +20,12 @@ from typing import Any, Sequence
 
 from lab_attrib.blame import (
     MAX_PRECURSOR_OVERLAP_PERMILLE,
-    MAX_SPECTRAL_RESIDUAL_PERMILLE,
     MIN_RESOLVABLE_SNR_TENTHS,
     AssayTelemetry,
     AttributionOutcome,
     OrthogonalModality,
     attribute_assay_outcome,
+    max_residual_for_fit_method,
 )
 
 
@@ -196,7 +196,9 @@ def _compute_posterior_hit_prob(
         max(0.0, float(telemetry.snr_tenths) / float(MIN_RESOLVABLE_SNR_TENTHS)),
     )
     rwp_attenuation = (
-        0.5 if telemetry.spectral_residual_permille > MAX_SPECTRAL_RESIDUAL_PERMILLE else 1.0
+        0.5
+        if telemetry.spectral_residual_permille > max_residual_for_fit_method(telemetry.fit_method)
+        else 1.0
     )
     info_weight = snr_ratio * rwp_attenuation
     delta_log_odds = info_weight * (0.55 if telemetry.target_signal_present else -0.55)
@@ -245,7 +247,9 @@ def route_orthogonal_assay(
         )
 
     has_ghost_overlap = telemetry.precursor_overlap_permille > MAX_PRECURSOR_OVERLAP_PERMILLE
-    has_high_rwp = telemetry.spectral_residual_permille > MAX_SPECTRAL_RESIDUAL_PERMILLE
+    has_high_rwp = (
+        telemetry.spectral_residual_permille > max_residual_for_fit_method(telemetry.fit_method)
+    )
     has_low_snr = telemetry.snr_tenths < MIN_RESOLVABLE_SNR_TENTHS
 
     active_blindspots: set[str] = {

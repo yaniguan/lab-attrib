@@ -1,0 +1,421 @@
+{
+  "benchmark": "lab_attrib_attributed_chem_rrt_frontier",
+  "dataset": "synthetic_esol_fallback (720 molecules)",
+  "n_seeds": 5,
+  "seeds": [
+    11,
+    23,
+    37,
+    53,
+    71
+  ],
+  "n_rounds": 9,
+  "batch_size": 20,
+  "primary_budget_assays": 180,
+  "fault_flag_recall": 1.0,
+  "false_alarm_rate": 0.0,
+  "nominal_conformal_target_pct": 90.0,
+  "hit_definition": "rings >= 3 and true_log_solubility >= -3.5",
+  "regimes": {
+    "naive_raw_writeback": {
+      "mean_verified_multi_ring_hits": 13.2,
+      "mean_false_positive_hits": 6.2,
+      "false_discovery_rate_pct": 31.69,
+      "mean_poisoned_memory_entries": 65.6,
+      "conformal_coverage_pct": 59.8,
+      "mean_frontier_mae": 0.9973,
+      "mean_frontier_rmse": 1.1766,
+      "mean_initial_tau": 1.38,
+      "mean_final_tau": 1.38,
+      "mean_stepping_stone_expansions": 0.0,
+      "mean_primary_assays": 180.0,
+      "mean_robot_retries": 0.0,
+      "mean_orthogonal_assays": 0.0,
+      "mean_total_measurements": 180.0,
+      "mean_certified_ledger_entries": 0.0,
+      "all_ledger_chains_valid": true,
+      "round_trajectories": {
+        "rounds": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "mean_frontier_mae": [
+          0.6234,
+          0.7333,
+          0.8575,
+          1.0092,
+          1.0385,
+          1.0988,
+          1.0617,
+          1.0325,
+          0.9973
+        ],
+        "mean_cumulative_poisoned_entries": [
+          6.4,
+          14.8,
+          23.2,
+          30.8,
+          37.0,
+          46.0,
+          52.6,
+          59.0,
+          65.6
+        ],
+        "mean_cumulative_verified_hits": [
+          1.4,
+          3.8,
+          7.4,
+          9.4,
+          10.4,
+          11.8,
+          12.6,
+          12.8,
+          13.2
+        ]
+      }
+    },
+    "pre_gate_only_static": {
+      "mean_verified_multi_ring_hits": 0.0,
+      "mean_false_positive_hits": 0.0,
+      "false_discovery_rate_pct": 0.0,
+      "mean_poisoned_memory_entries": 32.8,
+      "conformal_coverage_pct": 59.21,
+      "mean_frontier_mae": 2.7944,
+      "mean_frontier_rmse": 3.5957,
+      "mean_initial_tau": 1.38,
+      "mean_final_tau": 1.38,
+      "mean_stepping_stone_expansions": 0.0,
+      "mean_primary_assays": 88.8,
+      "mean_robot_retries": 0.0,
+      "mean_orthogonal_assays": 0.0,
+      "mean_total_measurements": 88.8,
+      "mean_certified_ledger_entries": 0.0,
+      "all_ledger_chains_valid": true,
+      "round_trajectories": {
+        "rounds": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "mean_frontier_mae": [
+          2.9767,
+          3.4333,
+          3.5764,
+          3.4417,
+          3.0202,
+          2.7944,
+          2.7944,
+          2.7944,
+          2.7944
+        ],
+        "mean_cumulative_poisoned_entries": [
+          7.8,
+          14.6,
+          21.8,
+          27.8,
+          31.6,
+          32.8,
+          32.8,
+          32.8,
+          32.8
+        ],
+        "mean_cumulative_verified_hits": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "unattributed_frontier_probes": {
+      "mean_verified_multi_ring_hits": 13.2,
+      "mean_false_positive_hits": 5.2,
+      "false_discovery_rate_pct": 27.21,
+      "mean_poisoned_memory_entries": 66.0,
+      "conformal_coverage_pct": 55.6,
+      "mean_frontier_mae": 1.0937,
+      "mean_frontier_rmse": 1.2817,
+      "mean_initial_tau": 1.38,
+      "mean_final_tau": 11.177,
+      "mean_stepping_stone_expansions": 6.6,
+      "mean_primary_assays": 180.0,
+      "mean_robot_retries": 0.0,
+      "mean_orthogonal_assays": 0.0,
+      "mean_total_measurements": 180.0,
+      "mean_certified_ledger_entries": 0.0,
+      "all_ledger_chains_valid": true,
+      "round_trajectories": {
+        "rounds": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "mean_frontier_mae": [
+          1.664,
+          2.1247,
+          1.5885,
+          1.2195,
+          1.1401,
+          1.0182,
+          1.0479,
+          1.0632,
+          1.0937
+        ],
+        "mean_cumulative_poisoned_entries": [
+          6.2,
+          13.4,
+          21.0,
+          28.0,
+          36.2,
+          43.2,
+          49.8,
+          57.6,
+          66.0
+        ],
+        "mean_cumulative_verified_hits": [
+          0.2,
+          0.8,
+          3.0,
+          5.8,
+          8.2,
+          11.2,
+          12.0,
+          13.0,
+          13.2
+        ]
+      }
+    },
+    "lab_attrib_full_closed_loop": {
+      "mean_verified_multi_ring_hits": 15.2,
+      "mean_false_positive_hits": 0.0,
+      "false_discovery_rate_pct": 0.0,
+      "mean_poisoned_memory_entries": 0.0,
+      "conformal_coverage_pct": 96.73,
+      "mean_frontier_mae": 0.48,
+      "mean_frontier_rmse": 0.6115,
+      "mean_initial_tau": 1.38,
+      "mean_final_tau": 11.177,
+      "mean_stepping_stone_expansions": 6.6,
+      "mean_primary_assays": 180.0,
+      "mean_robot_retries": 39.4,
+      "mean_orthogonal_assays": 39.0,
+      "mean_total_measurements": 258.4,
+      "mean_certified_ledger_entries": 178.6,
+      "all_ledger_chains_valid": true,
+      "round_trajectories": {
+        "rounds": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "mean_frontier_mae": [
+          0.7309,
+          0.5834,
+          0.5397,
+          0.5019,
+          0.4818,
+          0.485,
+          0.4839,
+          0.482,
+          0.48
+        ],
+        "mean_cumulative_poisoned_entries": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean_cumulative_verified_hits": [
+          0.2,
+          0.4,
+          1.6,
+          5.6,
+          8.8,
+          10.6,
+          12.4,
+          13.4,
+          15.2
+        ]
+      }
+    },
+    "lab_attrib_equal_budget": {
+      "mean_verified_multi_ring_hits": 10.6,
+      "mean_false_positive_hits": 0.0,
+      "false_discovery_rate_pct": 0.0,
+      "mean_poisoned_memory_entries": 0.0,
+      "conformal_coverage_pct": 96.46,
+      "mean_frontier_mae": 0.4864,
+      "mean_frontier_rmse": 0.6155,
+      "mean_initial_tau": 1.38,
+      "mean_final_tau": 10.866,
+      "mean_stepping_stone_expansions": 6.4,
+      "mean_primary_assays": 126.4,
+      "mean_robot_retries": 27.4,
+      "mean_orthogonal_assays": 26.2,
+      "mean_total_measurements": 180.0,
+      "mean_certified_ledger_entries": 125.0,
+      "all_ledger_chains_valid": true,
+      "round_trajectories": {
+        "rounds": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "mean_frontier_mae": [
+          0.7309,
+          0.5834,
+          0.5397,
+          0.5019,
+          0.4818,
+          0.485,
+          0.4864,
+          0.4864,
+          0.4864
+        ],
+        "mean_cumulative_poisoned_entries": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "mean_cumulative_verified_hits": [
+          0.2,
+          0.4,
+          1.6,
+          5.6,
+          8.8,
+          10.6,
+          10.6,
+          10.6,
+          10.6
+        ]
+      }
+    }
+  },
+  "sensor_recall_sweep": [
+    {
+      "fault_flag_recall": 1.0,
+      "false_alarm_rate": 0.0,
+      "lab_attrib_full_closed_loop": {
+        "mean_verified_multi_ring_hits": 15.2,
+        "mean_false_positive_hits": 0.0,
+        "false_discovery_rate_pct": 0.0,
+        "mean_poisoned_memory_entries": 0.0,
+        "conformal_coverage_pct": 96.73,
+        "mean_frontier_mae": 0.48,
+        "mean_frontier_rmse": 0.6115,
+        "mean_total_measurements": 258.4,
+        "mean_certified_ledger_entries": 178.6
+      },
+      "lab_attrib_equal_budget": {
+        "mean_verified_multi_ring_hits": 10.6,
+        "mean_false_positive_hits": 0.0,
+        "false_discovery_rate_pct": 0.0,
+        "mean_poisoned_memory_entries": 0.0,
+        "conformal_coverage_pct": 96.46,
+        "mean_frontier_mae": 0.4864,
+        "mean_frontier_rmse": 0.6155,
+        "mean_total_measurements": 180.0,
+        "mean_certified_ledger_entries": 125.0
+      }
+    },
+    {
+      "fault_flag_recall": 0.9,
+      "false_alarm_rate": 0.0,
+      "lab_attrib_full_closed_loop": {
+        "mean_verified_multi_ring_hits": 15.0,
+        "mean_false_positive_hits": 1.2,
+        "false_discovery_rate_pct": 7.23,
+        "mean_poisoned_memory_entries": 5.2,
+        "conformal_coverage_pct": 99.18,
+        "mean_frontier_mae": 0.4857,
+        "mean_frontier_rmse": 0.6217,
+        "mean_total_measurements": 253.0,
+        "mean_certified_ledger_entries": 178.8
+      },
+      "lab_attrib_equal_budget": {
+        "mean_verified_multi_ring_hits": 11.2,
+        "mean_false_positive_hits": 1.0,
+        "false_discovery_rate_pct": 8.01,
+        "mean_poisoned_memory_entries": 4.4,
+        "conformal_coverage_pct": 99.16,
+        "mean_frontier_mae": 0.4928,
+        "mean_frontier_rmse": 0.6319,
+        "mean_total_measurements": 180.0,
+        "mean_certified_ledger_entries": 128.6
+      }
+    },
+    {
+      "fault_flag_recall": 0.8,
+      "false_alarm_rate": 0.0,
+      "lab_attrib_full_closed_loop": {
+        "mean_verified_multi_ring_hits": 15.0,
+        "mean_false_positive_hits": 3.6,
+        "false_discovery_rate_pct": 18.29,
+        "mean_poisoned_memory_entries": 11.4,
+        "conformal_coverage_pct": 99.4,
+        "mean_frontier_mae": 0.5109,
+        "mean_frontier_rmse": 0.6516,
+        "mean_total_measurements": 246.0,
+        "mean_certified_ledger_entries": 179.0
+      },
+      "lab_attrib_equal_budget": {
+        "mean_verified_multi_ring_hits": 10.6,
+        "mean_false_positive_hits": 2.4,
+        "false_discovery_rate_pct": 18.38,
+        "mean_poisoned_memory_entries": 9.0,
+        "conformal_coverage_pct": 99.8,
+        "mean_frontier_mae": 0.5168,
+        "mean_frontier_rmse": 0.6597,
+        "mean_total_measurements": 180.0,
+        "mean_certified_ledger_entries": 130.8
+      }
+    }
+  ]
+}

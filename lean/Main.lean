@@ -51,6 +51,12 @@ private def parseModality (raw : String) : Except String OrthogonalModality :=
   | "1H-NMR" => .ok .nmr1H
   | _        => .error s!"Invalid OrthogonalModality token: {raw}"
 
+private def parseFitMethod (raw : String) : Except String SpectralFitMethod :=
+  match raw with
+  | "rietveld"   => .ok .rietveld
+  | "stick_nnls" => .ok .stickNnls
+  | _            => .error s!"Invalid SpectralFitMethod token: {raw}"
+
 private def formatBool (b : Bool) : String :=
   if b then "true" else "false"
 
@@ -68,9 +74,26 @@ private def formatAction (a : DiagnosticAction) : String :=
   | .commitCertifiedNeg => "COMMIT_CERTIFIED_NEGATIVE"
   | .commitCertifiedHit => "COMMIT_CERTIFIED_HIT"
 
-/-- Evaluate one 28-column TSV row and emit deterministic 12-column TSV output. -/
+/-- Evaluate one 28- or 29-column TSV row and emit deterministic 12-column TSV output. -/
 private def evaluateTsvRow (cols : List String) : Except String String := do
-  match cols with
+  let (coreCols, fitMethodRaw) ←
+    match cols with
+    | [rowId, dispS, aspS, incS, sealS, posS, blankS, detS, precS, rwpS, snrS, sigS,
+       posRecS, zPrimeS, posZsS, hasOrthS, orthModS, orthCalS, orthSnrS, orthSelS, orthConfS,
+       tauS, etaS, distS, propTauS, volS, stockS, hazS] =>
+        pure ([rowId, dispS, aspS, incS, sealS, posS, blankS, detS, precS, rwpS, snrS, sigS,
+               posRecS, zPrimeS, posZsS, hasOrthS, orthModS, orthCalS, orthSnrS, orthSelS, orthConfS,
+               tauS, etaS, distS, propTauS, volS, stockS, hazS], "rietveld")
+    | [rowId, dispS, aspS, incS, sealS, posS, blankS, detS, precS, rwpS, snrS, sigS,
+       posRecS, zPrimeS, posZsS, hasOrthS, orthModS, orthCalS, orthSnrS, orthSelS, orthConfS,
+       tauS, etaS, distS, propTauS, volS, stockS, hazS, fitMethodS] =>
+        pure ([rowId, dispS, aspS, incS, sealS, posS, blankS, detS, precS, rwpS, snrS, sigS,
+               posRecS, zPrimeS, posZsS, hasOrthS, orthModS, orthCalS, orthSnrS, orthSelS, orthConfS,
+               tauS, etaS, distS, propTauS, volS, stockS, hazS], fitMethodS)
+    | _ =>
+        .error s!"Expected 28 or 29 tab-separated columns, got {cols.length}"
+
+  match coreCols with
   | [rowId, dispS, aspS, incS, sealS, posS, blankS, detS, precS, rwpS, snrS, sigS,
      posRecS, zPrimeS, posZsS, hasOrthS, orthModS, orthCalS, orthSnrS, orthSelS, orthConfS,
      tauS, etaS, distS, propTauS, volS, stockS, hazS] =>
@@ -89,6 +112,7 @@ private def evaluateTsvRow (cols : List String) : Except String String := do
       let zPrime  ← parseIntField zPrimeS
       let posZs   ← parseIntField posZsS
       let hasOrth ← parseBoolField hasOrthS
+      let fitM    ← parseFitMethod fitMethodRaw
 
       let telemetry : AssayTelemetry := {
         dispenseErrorPermille           := disp
@@ -105,6 +129,7 @@ private def evaluateTsvRow (cols : List String) : Except String String := do
         positiveControlRecoveryPermille := posRec
         plateZPrimeTenths               := zPrime
         positiveControlZscoreTenths     := posZs
+        fitMethod                       := fitM
       }
 
       let orthOpt : Option OrthogonalAssayReadout ←
@@ -172,7 +197,7 @@ private def evaluateTsvRow (cols : List String) : Except String String := do
       ]
       return String.intercalate "\t" outFields
   | _ =>
-      .error s!"Expected 28 tab-separated columns, got {cols.length}"
+      .error "Unreachable column destructuring"
 
 private partial def readAllStdinLines (stdin : IO.FS.Stream) (acc : List String) : IO (List String) := do
   let line ← stdin.getLine

@@ -18,6 +18,15 @@ def _two_theta_grid() -> list[float]:
     return [10.0 + 1.25 * idx for idx in range(48)]
 
 
+def _clean_edge_runtime() -> dict[str, Any]:
+    return {
+        "dispense_error_permille": 11,
+        "aspiration_clean": True,
+        "incubation_window_clean": True,
+        "seal_intact": True,
+    }
+
+
 def test_wire_metadata_and_cwd_independent_dynamic_import(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -34,10 +43,33 @@ def test_wire_metadata_and_cwd_independent_dynamic_import(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    out = module.process_packet({"run_id": "cwd-check-001", "candidate_smiles": "CCO"})
-    assert out["halted"] is False
-    assert out["attribution"]["outcome"] == "CERTIFIED_POSITIVE"
-    assert len(out["certified_ledger_entries"]) == 1
+    # Issue #14: SMILES-only packet without execution QC or characterization MUST fail closed!
+    quarantined = module.process_packet({"run_id": "cwd-check-001", "candidate_smiles": "CCO"})
+    assert quarantined["halted"] is True
+    assert quarantined["halt_reason"] == "L4_ATTRIB_QUARANTINE"
+    assert quarantined["attribution"]["outcome"] == "AMBIGUOUS_CHARACTERIZATION"
+    assert quarantined["attribution"]["admit_to_memory"] is False
+    assert quarantined["certified_ledger_entries"] == []
+    assert "snr_tenths" in quarantined["attribution"]["defaulted_fields"]
+    assert "target_signal_present" in quarantined["attribution"]["defaulted_fields"]
+    assert (
+        "MISSING_EXPERIMENTAL_EVIDENCE"
+        in quarantined["attribution"]["violated_characterization_clauses"]
+    )
+
+    # Full explicit telemetry + characterization readout certifies cleanly from arbitrary CWD
+    certified = module.process_packet(
+        {
+            "run_id": "cwd-check-002",
+            "candidate_smiles": "CCO",
+            "edge_runtime": _clean_edge_runtime(),
+            "characterization": {"snr_tenths": 90, "target_signal_present": True},
+        }
+    )
+    assert certified["halted"] is False
+    assert certified["attribution"]["outcome"] == "CERTIFIED_POSITIVE"
+    assert certified["attribution"]["defaulted_fields"] == []
+    assert len(certified["certified_ledger_entries"]) == 1
 
 
 def test_clean_certified_positive_and_certified_negative_ledger_append() -> None:
@@ -45,11 +77,12 @@ def test_clean_certified_positive_and_certified_negative_ledger_append() -> None
     original_packet: dict[str, Any] = {
         "run_id": "run-pos-001",
         "candidate_smiles": "CC(=O)Oc1ccccc1C(=O)O",
-        "edge_runtime": {
-            "dispense_error_permille": 11,
-            "aspiration_clean": True,
-            "incubation_window_clean": True,
-            "seal_intact": True,
+        "edge_runtime": _clean_edge_runtime(),
+        "characterization": {
+            "snr_tenths": 88,
+            "target_signal_present": True,
+            "precursor_overlap_permille": 25,
+            "spectral_residual_permille": 35,
         },
     }
 
@@ -63,6 +96,7 @@ def test_clean_certified_positive_and_certified_negative_ledger_append() -> None
     assert pos_attr["outcome"] == "CERTIFIED_POSITIVE"
     assert pos_attr["action"] == "COMMIT_CERTIFIED_HIT"
     assert pos_attr["admit_to_memory"] is True
+    assert pos_attr["defaulted_fields"] == []
     assert pos_attr["orthogonal_modality"] is None
     assert isinstance(pos_attr["ledger_entry_sha256"], str)
     assert len(pos_attr["ledger_entry_sha256"]) == 64
@@ -233,6 +267,7 @@ def test_issue9_two_turn_orthogonal_resolution_unhalts_and_commits_ledger() -> N
         {
             "run_id": "ghost-2turn-001",
             "candidate_smiles": "c1ccc2c(c1)ccn2C",
+            "edge_runtime": _clean_edge_runtime(),
             "xrd_mixture": {
                 "observed": observed_ghost,
                 "target_basis": target_basis,
@@ -367,7 +402,8 @@ def test_issue7_stateless_multi_turn_wire_packets_preserve_prev_hash_continuity(
     p1_in = {
         "run_id": "chain-001",
         "candidate_smiles": "CCO",
-        "edge_runtime": {"dispense_error_permille": 10},
+        "edge_runtime": _clean_edge_runtime(),
+        "characterization": {"snr_tenths": 85, "target_signal_present": True},
     }
     stateless_1 = autolab_wire.process_packet(p1_in)
     stateful_1 = autolab_wire.process_packet(p1_in, ledger=stateful)
@@ -392,6 +428,133 @@ def test_issue7_stateless_multi_turn_wire_packets_preserve_prev_hash_continuity(
         stateless_2["attribution"]["ledger_entry_sha256"]
         == stateful_2["attribution"]["ledger_entry_sha256"]
     )
+
+
+# --- Issue #14: Default-Deny Quarantine on Context-Only, Bare-Readout & Lab-Feet Passthrough ---
+
+
+@pytest.mark.parametrize(
+    ("unmeasured_packet", "expected_defaulted_subset"),
+    [
+        (
+            {"candidate_smiles": "CCO"},
+            {"dispense_error_permille", "snr_tenths", "target_signal_present"},
+        ),
+        (
+            {
+                "run_id": "r2",
+                "trace": [{"repo": "stepbot", "layer": "L1", "status": "PASS", "summary": "ok"}],
+            },
+            {"dispense_error_permille", "snr_tenths", "target_signal_present"},
+        ),
+        (
+            {"protocol": {"steps": [{"aspirate": 50}]}},
+            {"dispense_error_permille", "snr_tenths", "target_signal_present"},
+        ),
+        (
+            {"parsed_spans": {"volume_ul": 100.0}},
+            {"dispense_error_permille", "snr_tenths", "target_signal_present"},
+        ),
+        (
+            {"candidate_features": {"mw": 180.16, "rings": 1.0}},
+            {"dispense_error_permille", "snr_tenths", "target_signal_present"},
+        ),
+        (
+            {"measured_value": 0.0},
+            {"dispense_error_permille", "snr_tenths", "target_signal_present"},
+        ),
+        (
+            {
+                "run_id": "lab-feet-passthrough-only",
+                "candidate_smiles": "CC(=O)Oc1ccccc1C(=O)O",
+                "edge_runtime": {
+                    "dispense_error_permille": 12,
+                    "aspiration_clean": True,
+                    "incubation_window_clean": True,
+                    "seal_intact": True,
+                    "sensor_source": "derived_from_protocol_hash",
+                    "interlocks_source": "packet_passthrough",
+                },
+            },
+            {"dispense_error_permille", "aspiration_clean", "snr_tenths", "target_signal_present"},
+        ),
+        (
+            {
+                "run_id": "exec-only-missing-characterization",
+                "candidate_smiles": "CCO",
+                "edge_runtime": {
+                    "dispense_error_permille": 11,
+                    "aspiration_clean": True,
+                    "incubation_window_clean": True,
+                    "seal_intact": True,
+                },
+            },
+            {"snr_tenths", "target_signal_present"},
+        ),
+        (
+            {
+                "run_id": "readout-only-missing-exec-qc",
+                "candidate_smiles": "CCO",
+                "readout": {"snr_tenths": 90, "target_signal_present": True},
+            },
+            {"dispense_error_permille", "aspiration_clean", "incubation_window_clean", "seal_intact"},
+        ),
+    ],
+)
+def test_issue14_context_only_and_incomplete_telemetry_packets_fail_closed_by_default(
+    unmeasured_packet: dict[str, Any],
+    expected_defaulted_subset: set[str],
+) -> None:
+    out = autolab_wire.process_packet(unmeasured_packet)
+    assert out["halted"] is True
+    assert out["halt_reason"] == "L4_ATTRIB_QUARANTINE"
+    assert out["certified_ledger_entries"] == []
+
+    attr = out["attribution"]
+    assert attr["outcome"] == "AMBIGUOUS_CHARACTERIZATION"
+    assert attr["admit_to_memory"] is False
+    assert attr["ledger_entry_sha256"] is None
+    assert isinstance(attr["defaulted_fields"], list)
+    assert expected_defaulted_subset.issubset(set(attr["defaulted_fields"]))
+    assert "MISSING_EXPERIMENTAL_EVIDENCE" in attr["violated_characterization_clauses"]
+    assert "MISSING_EXPERIMENTAL_EVIDENCE" in attr["diagnostic_notes"]
+
+
+def test_issue14_explicit_edge_runtime_plus_xrd_mixture_certifies_and_opt_in_demo_flag() -> None:
+    grid = _two_theta_grid()
+    prec_clean = build_gaussian_spectrum(grid, [(16.0, 1.0, 1.8)])
+    target_basis = build_gaussian_spectrum(grid, [(34.0, 1.0, 2.0), (52.0, 0.92, 2.0)])
+    observed_hit = [0.05 * prec_clean[i] + 1.10 * target_basis[i] for i in range(len(grid))]
+
+    out_xrd = autolab_wire.process_packet(
+        {
+            "run_id": "explicit-xrd-hit-001",
+            "candidate_smiles": "CC(=O)Oc1ccccc1C(=O)O",
+            "edge_runtime": _clean_edge_runtime(),
+            "xrd_mixture": {
+                "observed": observed_hit,
+                "target_basis": target_basis,
+                "precursor_bases": [prec_clean],
+            },
+        }
+    )
+    assert out_xrd["halted"] is False
+    assert out_xrd["halt_reason"] is None
+    assert out_xrd["attribution"]["outcome"] == "CERTIFIED_POSITIVE"
+    assert out_xrd["attribution"]["admit_to_memory"] is True
+    assert out_xrd["attribution"]["defaulted_fields"] == []
+    assert out_xrd["attribution"]["demo_default_telemetry_used"] is False
+    assert len(out_xrd["certified_ledger_entries"]) == 1
+
+    # Explicit opt-in allow_default_telemetry=True permits demo packets while recording defaulted_fields
+    demo_out = autolab_wire.process_packet(
+        {"run_id": "demo-opt-in-001", "candidate_smiles": "CCO"},
+        allow_default_telemetry=True,
+    )
+    assert demo_out["halted"] is False
+    assert demo_out["attribution"]["outcome"] == "CERTIFIED_POSITIVE"
+    assert demo_out["attribution"]["demo_default_telemetry_used"] is True
+    assert "snr_tenths" in demo_out["attribution"]["defaulted_fields"]
 
 
 

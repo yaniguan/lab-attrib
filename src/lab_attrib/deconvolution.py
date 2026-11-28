@@ -1865,6 +1865,9 @@ class ChimeraAnalysisResult:
     mixture_alpha_interferent: float
     mixture_entropy_similarity: float
     entropy_gain_over_single: float
+    unexplained_intensity_fraction: float = 0.0
+    unexplained_fragment_entropy: float = 0.0
+    dual_precursor_detected: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1875,6 +1878,9 @@ class ChimeraAnalysisResult:
             "mixture_alpha_interferent": round(self.mixture_alpha_interferent, 4),
             "mixture_entropy_similarity": round(self.mixture_entropy_similarity, 6),
             "entropy_gain_over_single": round(self.entropy_gain_over_single, 6),
+            "unexplained_intensity_fraction": round(self.unexplained_intensity_fraction, 6),
+            "unexplained_fragment_entropy": round(self.unexplained_fragment_entropy, 6),
+            "dual_precursor_detected": self.dual_precursor_detected,
         }
 
 
@@ -1889,12 +1895,17 @@ def detect_msms_chimera(
     min_interferent_alpha: float = 0.18,
     min_mixture_gain: float = 0.045,
     weighted: bool = True,
+    enable_residual_precursor_check: bool = True,
 ) -> ChimeraAnalysisResult:
     """Detect co-eluting near-isobaric tandem MS/MS chimeras within a Q1 precursor window.
 
-    Evaluates whether `observed` is significantly better explained as a convex combination
-    `(1 - alpha) * target + alpha * interferent` (`alpha in [min_interferent_alpha, 0.85]`)
-    of two structurally distinct precursors inside `+-isolation_window_da`.
+    Combines two complementary detectors:
+    1. Library-backed convex 2-component mixture entropy maximization
+       `(1 - alpha) * target + alpha * interferent` across `candidate_pool` within `+-isolation_window_da`.
+    2. Pool-free reference-residual & Q1 dual-precursor check (`enable_residual_precursor_check=True`)
+       detecting unmodeled co-isolated precursor ions (excluding +1.00335 Da C13 isotopes),
+       supra-precursor fragment ions, and high-mass unexplained multi-peak fragment residuals even
+       when the interferent compound is absent from `candidate_pool`.
     """
     tol_da = _require_finite_float(mz_tolerance_da, "mz_tolerance_da")
     iso_da = _require_finite_float(isolation_window_da, "isolation_window_da")
@@ -1912,6 +1923,52 @@ def detect_msms_chimera(
         clean_noise_rel=0.01,
         merge_within_da=tol_da * 0.5,
     )
+
+    # Pool-free residual fragment & Q1 secondary-precursor analysis on unweighted intensities
+    mzs_obs_raw, probs_obs_raw, _ = _prepare_ms_probability_peaks(
+        observed.mzs,
+        observed.intensities,
+        weighted=False,
+        clean_noise_rel=0.01,
+        merge_within_da=tol_da * 0.5,
+    )
+    mzs_targ_raw, _, _ = _prepare_ms_probability_peaks(
+        target_reference.mzs,
+        target_reference.intensities,
+        weighted=False,
+        clean_noise_rel=0.005,
+        merge_within_da=tol_da * 0.5,
+    )
+    unexplained_peaks: list[tuple[float, float]] = []
+    dual_precursor_detected = False
+    supra_precursor_fragment = False
+    obs_prec = observed.precursor_mz
+    for mz_val, p_val in zip(mzs_obs_raw, probs_obs_raw):
+        lo_t = bisect.bisect_left(mzs_targ_raw, mz_val - tol_da)
+        hi_t = bisect.bisect_right(mzs_targ_raw, mz_val + tol_da)
+        if lo_t == hi_t:
+            unexplained_peaks.append((mz_val, p_val))
+            if obs_prec is not None:
+                delta_mz = mz_val - obs_prec
+                is_c13_or_c14 = (
+                    abs(delta_mz - 1.00335) <= 0.015 or abs(delta_mz - 2.0067) <= 0.020
+                )
+                if (
+                    max(tol_da, 0.025) < abs(delta_mz) <= iso_da
+                    and not is_c13_or_c14
+                    and p_val >= 0.035
+                ):
+                    dual_precursor_detected = True
+                elif delta_mz > iso_da and not is_c13_or_c14 and p_val >= 0.04:
+                    supra_precursor_fragment = True
+
+    unexplained_mass = sum(p for _, p in unexplained_peaks)
+    if unexplained_mass > 1e-12:
+        u_probs = [p / unexplained_mass for _, p in unexplained_peaks if p > 0.0]
+        unexplained_ent = -sum(q * math.log(q) for q in u_probs)
+    else:
+        unexplained_ent = 0.0
+    n_major_unexplained = sum(1 for _, p in unexplained_peaks if p >= 0.03)
 
     pool: list[MassSpecRecord] = []
     if interferent_reference is not None:
@@ -1970,11 +2027,20 @@ def detect_msms_chimera(
         and best_sim_inter >= 0.50
         and min_interferent_alpha <= best_alpha <= 0.88
     )
-    is_chimera = bool(
+    pool_chimera = bool(
         best_interferent is not None
         and min_interferent_alpha <= best_alpha <= 0.88
         and (gain >= min_mixture_gain or dual_high_overlap)
     )
+    residual_chimera = bool(
+        enable_residual_precursor_check
+        and (
+            dual_precursor_detected
+            or supra_precursor_fragment
+            or (unexplained_mass >= 0.52 and n_major_unexplained >= 2 and unexplained_ent >= 0.20)
+        )
+    )
+    is_chimera = bool(pool_chimera or residual_chimera)
 
     return ChimeraAnalysisResult(
         is_chimera=is_chimera,
@@ -1984,4 +2050,7 @@ def detect_msms_chimera(
         mixture_alpha_interferent=best_alpha if best_interferent is not None else 0.0,
         mixture_entropy_similarity=best_mix_sim,
         entropy_gain_over_single=gain,
+        unexplained_intensity_fraction=unexplained_mass,
+        unexplained_fragment_entropy=unexplained_ent,
+        dual_precursor_detected=dual_precursor_detected,
     )

@@ -18,6 +18,7 @@ from typing import Any
 MAX_DISPENSE_ERROR_PERMILLE: int = 50
 MAX_PRECURSOR_OVERLAP_PERMILLE: int = 150
 MAX_SPECTRAL_RESIDUAL_PERMILLE: int = 100
+MAX_STICK_NNLS_RESIDUAL_PERMILLE: int = 200
 MIN_RESOLVABLE_SNR_TENTHS: int = 30
 MAX_STEPPING_STONE_VOLUME_UL: int = 10
 MAX_EXPANSION_ETA_PERMILLE: int = 500
@@ -63,6 +64,25 @@ class OrthogonalModality(str, Enum):
     NMR_1H = "1H-NMR"
 
 
+class SpectralFitMethod(str, Enum):
+    """Spectral profile fitting method governing the calibrated R_wp residual threshold."""
+
+    RIETVELD = "rietveld"
+    STICK_NNLS = "stick_nnls"
+
+
+def max_residual_for_fit_method(fit_method: SpectralFitMethod | str) -> int:
+    """Mirror of `LabAttribLean.maxResidualForFitMethod`."""
+    method = (
+        fit_method
+        if isinstance(fit_method, SpectralFitMethod)
+        else SpectralFitMethod(str(fit_method))
+    )
+    if method is SpectralFitMethod.STICK_NNLS:
+        return MAX_STICK_NNLS_RESIDUAL_PERMILLE
+    return MAX_SPECTRAL_RESIDUAL_PERMILLE
+
+
 @dataclass(frozen=True)
 class AssayTelemetry:
     """Post-execution robotic, environmental, control-well, and deconvolved spectral telemetry."""
@@ -81,8 +101,15 @@ class AssayTelemetry:
     positive_control_recovery_permille: int = 1000
     plate_z_prime_tenths: int = 70
     positive_control_zscore_tenths: int = 50
+    fit_method: SpectralFitMethod = SpectralFitMethod.RIETVELD
 
     def __post_init__(self) -> None:
+        if not isinstance(self.fit_method, SpectralFitMethod):
+            if not isinstance(self.fit_method, str):
+                raise ValueError(
+                    f"fit_method must be 'rietveld' or 'stick_nnls', got {self.fit_method!r}"
+                )
+            object.__setattr__(self, "fit_method", SpectralFitMethod(self.fit_method))
         for name in (
             "dispense_error_permille",
             "precursor_overlap_permille",
@@ -140,14 +167,16 @@ class AssayTelemetry:
             faults.append("DETECTOR_UNCALIBRATED_OR_SATURATED")
         if self.precursor_overlap_permille > MAX_PRECURSOR_OVERLAP_PERMILLE:
             faults.append("PRECURSOR_GHOST_PEAK_OVERLAP")
-        if self.spectral_residual_permille > MAX_SPECTRAL_RESIDUAL_PERMILLE:
+        if self.spectral_residual_permille > max_residual_for_fit_method(self.fit_method):
             faults.append("HIGH_SPECTRAL_RWP_RESIDUAL")
         if self.snr_tenths < MIN_RESOLVABLE_SNR_TENTHS:
             faults.append("LOW_ASSAY_SNR")
         return faults
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["fit_method"] = self.fit_method.value
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AssayTelemetry:
@@ -162,6 +191,10 @@ class AssayTelemetry:
             if not isinstance(raw, bool) and type(raw).__name__ != "bool_":
                 raise ValueError(f"{key} must be a bool, got {raw!r}")
             return bool(raw)
+
+        raw_fit = data.get("fit_method", SpectralFitMethod.RIETVELD.value)
+        if not isinstance(raw_fit, (str, SpectralFitMethod)):
+            raise ValueError(f"fit_method must be a string, got {raw_fit!r}")
 
         return cls(
             dispense_error_permille=_req_int("dispense_error_permille"),
@@ -182,6 +215,7 @@ class AssayTelemetry:
             positive_control_zscore_tenths=_req_int(
                 "positive_control_zscore_tenths", 50, has_default=True
             ),
+            fit_method=SpectralFitMethod(raw_fit),
         )
 
 
@@ -301,7 +335,8 @@ def characterization_identifiable(telemetry: AssayTelemetry) -> bool:
     return (
         telemetry.detector_calibrated
         and telemetry.precursor_overlap_permille <= MAX_PRECURSOR_OVERLAP_PERMILLE
-        and telemetry.spectral_residual_permille <= MAX_SPECTRAL_RESIDUAL_PERMILLE
+        and telemetry.spectral_residual_permille
+        <= max_residual_for_fit_method(telemetry.fit_method)
         and telemetry.snr_tenths >= MIN_RESOLVABLE_SNR_TENTHS
     )
 

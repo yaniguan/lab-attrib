@@ -232,6 +232,8 @@ def test_alab_gpss_summary_parser_routes_spinel_runs() -> None:
                         "LiCl (Fm-3m)": 0.0384,
                     },
                     "Rwp (%)": "8.89%",
+                    "missing_peaks": [{"two_theta": 30.36, "relative_intensity": 0.15}],
+                    "extra_peaks": [],
                 },
             },
             {
@@ -245,14 +247,68 @@ def test_alab_gpss_summary_parser_routes_spinel_runs() -> None:
                     "Rwp (%)": "11.40%",
                 },
             },
+            {
+                "sample_index": 99,
+                "composition": "Li1.34Fe0.78Ta0.22Cl4",
+                "xrd_analysis_result": {
+                    "weight_fractions_of_each_phases": {
+                        "Li6FeCl8 (Fm-3m)": 0.9597,
+                        "TaCl4 (C12/m1)": 0.0403,
+                    },
+                    "Rwp (%)": "5.15%",
+                    "missing_peaks": [{"two_theta": 15.46, "relative_intensity": 0.19}],
+                    "extra_peaks": [{"two_theta": 21.99, "relative_intensity": 0.17}],
+                },
+            },
+            {
+                "sample_index": 49,
+                "composition": "Li1.6Cr0.4Mn0.2Y0.4Cl4",
+                "xrd_analysis_result": {
+                    "weight_fractions_of_each_phases": {
+                        "Li3YCl6 (P-3m1)": 0.55,
+                        "LiCl (Fm-3m)": 0.30,
+                        "CrCl2 (Pnnm)": 0.15,
+                    },
+                    "Rwp (%)": "8.22%",
+                    "missing_peaks": [],
+                    "extra_peaks": [
+                        {"two_theta": 15.93, "relative_intensity": 1.0},
+                        {"two_theta": 34.22, "relative_intensity": 0.66},
+                    ],
+                },
+            },
         ]
     )
     parsed = load_alab_gpss_summary(alab_json)
-    assert len(parsed) == 2
+    assert len(parsed) == 4
+    # 0: Clean high-purity spinel -> CERTIFIED_POSITIVE (impurity_weight != precursor_overlap!)
     assert parsed[0]["attribution"]["outcome"] == "CERTIFIED_POSITIVE"
+    assert parsed[0]["impurity_weight_permille"] == 38
+    assert parsed[0]["precursor_overlap_permille"] != parsed[0]["impurity_weight_permille"]
     assert parsed[0]["orthogonal_routing"] is None
+
+    # 12: High Rwp (11.4% > 10.0%) -> AMBIGUOUS_CHARACTERIZATION
     assert parsed[1]["attribution"]["outcome"] == "AMBIGUOUS_CHARACTERIZATION"
     assert parsed[1]["orthogonal_routing"] is not None
+
+    # 99: Well-fit failed synthesis (Rwp = 5.15% <= 10%, 0% spinel, low extra_peaks) -> CERTIFIED_NEGATIVE!
+    assert parsed[2]["impurity_weight_permille"] == 1000
+    assert parsed[2]["precursor_overlap_permille"] <= 150
+    assert parsed[2]["attribution"]["outcome"] == "CERTIFIED_NEGATIVE"
+    assert parsed[2]["attribution"]["admit_to_memory"] is True
+    assert parsed[2]["attribution"]["lean_theorem_tag"] == "LabAttribLean.certified_negative_sound"
+    assert parsed[2]["orthogonal_routing"] is None
+
+    # 49: Failed synthesis with strong unmodeled extra peaks on spinel reflections -> AMBIGUOUS_CHARACTERIZATION
+    assert parsed[3]["impurity_weight_permille"] == 1000
+    assert parsed[3]["precursor_overlap_permille"] > 150
+    assert parsed[3]["attribution"]["outcome"] == "AMBIGUOUS_CHARACTERIZATION"
+
+    from lab_attrib import calibrate_alab_rwp_thresholds
+
+    cal_summary = calibrate_alab_rwp_thresholds(alab_json)
+    assert cal_summary["all_352_outcomes"]["CERTIFIED_NEGATIVE"] >= 1
+    assert cal_summary["all_352_outcomes"]["CERTIFIED_POSITIVE"] >= 1
 
 
 def test_jcamp_dx_and_csv_raman_parsers_resolve_ambiguous_xrd() -> None:
