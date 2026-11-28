@@ -277,6 +277,23 @@ def test_msms_spectral_entropy_similarity_and_chimera_quarantine() -> None:
     assert orth_chim.selectivity_clean is False
     assert orth_chim.target_confirmed is False
 
+    # Issue #16: Leave-interferent-out chimera detection via Q1 dual-precursor & unexplained residual entropy!
+    chim_obs_dual = MassSpecRecord(
+        identifier="CHIMERA_HELD_OUT_OBS",
+        mzs=(105.034, 118.065, 133.029, 146.060, 161.060, 174.091, 250.108, 250.520),
+        intensities=(0.45, 0.75, 0.55, 0.95, 0.60, 0.65, 0.50, 0.35),
+        precursor_mz=250.108,
+    )
+    chim_held_out = detect_msms_chimera(
+        chim_obs_dual,
+        obs_ce40,
+        candidate_pool=[disjoint],  # isobar_interferent strictly held out of pool!
+        isolation_window_da=1.0,
+    )
+    assert chim_held_out.is_chimera is True
+    assert chim_held_out.dual_precursor_detected is True
+    assert chim_held_out.unexplained_intensity_fraction > 0.45
+
 
 def test_dif_cif_and_rod_parsers_and_jcamp_roundtrip() -> None:
     dif_sample = """      Calcite

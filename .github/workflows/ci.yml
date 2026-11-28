@@ -31,6 +31,13 @@ jobs:
           pip install -e . pytest numpy
       - name: Run pytest suite
         run: pytest -v
+      - name: Verify zero drift on live closed-loop benchmark (synthetic fallback + ESOL if cached)
+        run: |
+          lab-attrib benchmark --synthetic-fallback --check-drift benchmarks/results/lab_attrib_synthetic_fallback.json
+          if [ -f benchmarks/data/delaney-processed.csv ]; then
+            echo "8c06a76f0c6487d29ab0f903e6a7a7139f189ab3c1178f159c8be8964602f189  benchmarks/data/delaney-processed.csv" | sha256sum -c -
+            lab-attrib benchmark --csv benchmarks/data/delaney-processed.csv --check-drift benchmarks/results/lab_attrib_benchmark.json
+          fi
       - name: Run CLI showcase
         run: |
           lab-attrib demo
@@ -54,7 +61,7 @@ jobs:
       - name: Build LabAttribLean and lab-attrib-lean CLI (zero sorry, no custom axioms, zero warnings)
         working-directory: lean
         run: lake build
-      - name: Audit #print axioms across all 30 LabAttribLean theorems
+      - name: Audit #print axioms across all 31 LabAttribLean theorems
         run: python scripts/check_lean_axioms.py
       - name: Run compiled Lean --batch-tsv vs Python runtime parity suite
         env:

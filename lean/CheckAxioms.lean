@@ -15,6 +15,7 @@ and zero custom axioms.
 #print axioms LabAttribLean.control_drift_blocks_memory_admission
 #print axioms LabAttribLean.dual_fault_quarantines_memory
 #print axioms LabAttribLean.unidentifiable_spectrum_never_certified
+#print axioms LabAttribLean.stick_nnls_calibrated_rwp_sound
 #print axioms LabAttribLean.certified_negative_sound
 #print axioms LabAttribLean.certified_positive_sound
 #print axioms LabAttribLean.admit_iff_exec_clean_and_identifiable

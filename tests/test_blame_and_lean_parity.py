@@ -15,6 +15,7 @@ from lab_attrib.blame import (
     MAX_PRECURSOR_OVERLAP_PERMILLE,
     MAX_SPECTRAL_RESIDUAL_PERMILLE,
     MAX_STEPPING_STONE_VOLUME_UL,
+    MAX_STICK_NNLS_RESIDUAL_PERMILLE,
     MIN_POS_CONTROL_RECOVERY_PERMILLE,
     MIN_POS_CONTROL_ZSCORE_TENTHS,
     MIN_RESOLVABLE_SNR_TENTHS,
@@ -25,6 +26,7 @@ from lab_attrib.blame import (
     DiagnosticAction,
     OrthogonalAssayReadout,
     OrthogonalModality,
+    SpectralFitMethod,
     admit_to_scientific_memory,
     attribute_assay_outcome,
     characterization_identifiable,
@@ -32,6 +34,7 @@ from lab_attrib.blame import (
     diagnose_assay,
     effective_attribution,
     execution_clean,
+    max_residual_for_fit_method,
     orthogonal_readout_clean,
     resolve_with_orthogonal_assay,
     route_diagnostic_action,
@@ -55,8 +58,8 @@ CHECKED_SUFFIXES = {
 }
 
 
-def _clean_telemetry(**overrides: int | bool) -> AssayTelemetry:
-    base: dict[str, int | bool] = {
+def _clean_telemetry(**overrides: int | bool | str | SpectralFitMethod) -> AssayTelemetry:
+    base: dict[str, int | bool | str | SpectralFitMethod] = {
         "dispense_error_permille": 12,
         "aspiration_clean": True,
         "incubation_window_clean": True,
@@ -71,6 +74,7 @@ def _clean_telemetry(**overrides: int | bool) -> AssayTelemetry:
         "positive_control_recovery_permille": 1000,
         "plate_z_prime_tenths": 70,
         "positive_control_zscore_tenths": 50,
+        "fit_method": SpectralFitMethod.RIETVELD,
     }
     base.update(overrides)
     return AssayTelemetry(**base)  # type: ignore[arg-type]
@@ -390,6 +394,24 @@ def test_issue8_compiled_lean_batch_tsv_differential_parity(tmp_path: Path) -> N
         vectors.append((f"STEP-{idx:04d}", t_step, None, probe_s))
         idx += 1
 
+    # Add Issue #17 fit_method ("rietveld" vs "stick_nnls") boundary vectors (100, 101, 200, 201)
+    for fit_m in (SpectralFitMethod.RIETVELD, SpectralFitMethod.STICK_NNLS):
+        for rwp_v in (
+            MAX_SPECTRAL_RESIDUAL_PERMILLE,
+            MAX_SPECTRAL_RESIDUAL_PERMILLE + 1,
+            MAX_STICK_NNLS_RESIDUAL_PERMILLE,
+            MAX_STICK_NNLS_RESIDUAL_PERMILLE + 1,
+        ):
+            for sig_v in (True, False):
+                t_fit = _clean_telemetry(
+                    spectral_residual_permille=rwp_v,
+                    target_signal_present=sig_v,
+                    fit_method=fit_m,
+                )
+                probe_fit = AttributedSteppingStone(300, 250, 350, 350, 8, True, True, t_fit)
+                vectors.append((f"FIT-{idx:04d}", t_fit, None, probe_fit))
+                idx += 1
+
     # Add explicit Issue #8 telemetry-tampering & same-length sampleId collision vectors
     t_neg_base = _clean_telemetry(dispense_error_permille=12, snr_tenths=65, target_signal_present=False)
     t_neg_mut = _clean_telemetry(dispense_error_permille=50, snr_tenths=30, target_signal_present=False)
@@ -438,6 +460,7 @@ def test_issue8_compiled_lean_batch_tsv_differential_parity(tmp_path: Path) -> N
             str(p.volume_ul),
             "1" if p.uses_only_stock_reagents else "0",
             "1" if p.within_hazard_envelope else "0",
+            t.fit_method.value,
         ]
         tsv_lines.append("\t".join(cols))
 
@@ -756,6 +779,40 @@ def test_lean_source_theorem_and_guard_counts_zero_sorry_zero_axiom() -> None:
     assert len(total_theorems) >= 30, f"Expected >= 30 theorems, found {len(total_theorems)}"
     assert "tampered_telemetry_breaks_entry_hash" in total_theorems
     assert len(total_guards) >= 16, f"Expected >= 16 #guard checks, found {len(total_guards)}"
+
+
+def test_fit_method_rwp_threshold_distinguishes_rietveld_and_stick_nnls() -> None:
+    assert max_residual_for_fit_method("rietveld") == MAX_SPECTRAL_RESIDUAL_PERMILLE == 100
+    assert max_residual_for_fit_method("stick_nnls") == MAX_STICK_NNLS_RESIDUAL_PERMILLE == 200
+
+    # Real A-Lab spinel stick-NNLS hit range (e.g. Rwp = 140 permille, overlap = 41 permille):
+    # quarantined under Rietveld limit (100), certified under stick_nnls limit (200)
+    t_rietveld = _clean_telemetry(
+        precursor_overlap_permille=41,
+        spectral_residual_permille=140,
+        snr_tenths=90,
+        target_signal_present=True,
+        fit_method="rietveld",
+    )
+    t_stick = _clean_telemetry(
+        precursor_overlap_permille=41,
+        spectral_residual_permille=140,
+        snr_tenths=90,
+        target_signal_present=True,
+        fit_method="stick_nnls",
+    )
+    assert diagnose_assay(t_rietveld).outcome is AttributionOutcome.AMBIGUOUS_CHARACTERIZATION
+    assert diagnose_assay(t_stick).outcome is AttributionOutcome.CERTIFIED_POSITIVE
+
+    # Stick-NNLS above 200 permille still quarantines
+    t_stick_high = _clean_telemetry(
+        precursor_overlap_permille=41,
+        spectral_residual_permille=201,
+        snr_tenths=90,
+        target_signal_present=True,
+        fit_method="stick_nnls",
+    )
+    assert diagnose_assay(t_stick_high).outcome is AttributionOutcome.AMBIGUOUS_CHARACTERIZATION
 
 
 def test_entire_repository_contains_strictly_zero_cjk_characters() -> None:

@@ -1,6 +1,6 @@
-"""Closed-Loop Attributed `Chem-RRT` Frontier Campaign on Delaney ESOL.
+"""Closed-Loop Attributed `Chem-RRT` Frontier Campaign on Delaney ESOL & AqSolDB.
 
-Benchmarks four experimental feedback regimes across multi-round molecular discovery:
+Benchmarks five experimental feedback regimes across multi-round molecular discovery:
 1. `naive_raw_writeback`:
    Jumps directly to deep OOD candidates without pre-execution containment or
    post-execution attribution; writes all robotic zero-signal artifacts and
@@ -14,11 +14,16 @@ Benchmarks four experimental feedback regimes across multi-round molecular disco
    spectrally ambiguous probes to expand `tau` and poison surrogate memory.
 4. `lab_attrib_full_closed_loop`:
    Combines pre-execution annular micro-containment and local `k`-NN `Chem-RRT` support
-   gating with synchronized end-of-round frontier commits, post-execution NNLS spectral
-   deconvolution (`xrd_deconvolve`), 4-way causal blame (`blame`), EVOI orthogonal
+   gating with synchronized end-of-round frontier commits, unclamped post-execution NNLS
+   spectral deconvolution (`xrd_deconvolve`), 4-way causal blame (`blame`), EVOI orthogonal
    assay routing (`orthogonal_router`), SHA-256 `CertifiedLedger` writeback (`ledger`),
    stratified holdout calibration + Gibbs-Candes online ACI (`alpha_t`), and
    `check_attributed_frontier_update`.
+5. `lab_attrib_equal_budget`:
+   Identical post-execution verification, retry, EVOI routing, and `CertifiedLedger`
+   architecture as `lab_attrib_full_closed_loop`, but deducts EVERY hardware retry and
+   secondary orthogonal assay directly from the fixed `n_rounds * batch_size` total
+   measurement budget (`180` total assays on the default `9 x 20` campaign).
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ from lab_attrib.blame import (
     AttributionOutcome,
     OrthogonalAssayReadout,
     OrthogonalModality,
+    SpectralFitMethod,
     admit_to_scientific_memory,
     attribute_assay_outcome,
     check_attributed_frontier_update,
@@ -59,6 +65,7 @@ REGIME_NAMES: tuple[str, ...] = (
     "pre_gate_only_static",
     "unattributed_frontier_probes",
     "lab_attrib_full_closed_loop",
+    "lab_attrib_equal_budget",
 )
 
 HIT_MIN_RINGS: int = 3
@@ -191,21 +198,24 @@ def build_synthetic_esol_pool(n_molecules: int = 720, seed: int = 0) -> list[Mol
 
 def resolve_molecule_pool(
     csv_path: str | Path | None = None,
+    *,
+    force_synthetic_fallback: bool = False,
 ) -> tuple[list[MoleculeCandidate], str]:
     """Load Delaney ESOL in a single pass if available, else return deterministic synthetic pool."""
-    candidates_to_check: list[Path] = []
-    if csv_path is not None:
-        candidates_to_check.append(Path(csv_path))
-    env_csv = os.environ.get("LAB_ATTRIB_ESOL_CSV")
-    if env_csv:
-        candidates_to_check.append(Path(env_csv))
-    if csv_path is None and not env_csv and DEFAULT_CACHED_ESOL_CSV.is_file():
-        candidates_to_check.append(DEFAULT_CACHED_ESOL_CSV)
+    if not force_synthetic_fallback:
+        candidates_to_check: list[Path] = []
+        if csv_path is not None:
+            candidates_to_check.append(Path(csv_path))
+        env_csv = os.environ.get("LAB_ATTRIB_ESOL_CSV")
+        if env_csv:
+            candidates_to_check.append(Path(env_csv))
+        if csv_path is None and not env_csv and DEFAULT_CACHED_ESOL_CSV.is_file():
+            candidates_to_check.append(DEFAULT_CACHED_ESOL_CSV)
 
-    for candidate in candidates_to_check:
-        if candidate.is_file():
-            loaded = load_delaney_esol_csv(candidate)
-            return loaded, f"delaney_esol_csv ({len(loaded)} molecules)"
+        for candidate in candidates_to_check:
+            if candidate.is_file():
+                loaded = load_delaney_esol_csv(candidate)
+                return loaded, f"delaney_esol_csv ({len(loaded)} molecules)"
     syn = build_synthetic_esol_pool()
     return syn, f"synthetic_esol_fallback ({len(syn)} molecules)"
 
@@ -381,9 +391,26 @@ def _simulate_wet_lab_execution(
     *,
     seed: int,
     attempt: int,
+    fault_flag_recall: float = 1.0,
+    false_alarm_rate: float = 0.0,
 ) -> SimulatedWetLabRun:
-    """Deterministic per-(seed, compound_id, attempt) wet-lab + spectral simulator."""
+    """Deterministic per-(seed, compound_id, attempt) wet-lab + unclamped NNLS spectral simulator.
+
+    - `fault_flag_recall` in `[0, 1]` controls sensor/library recall on hardware execution faults
+      and interfering ghost-precursor reference coverage. At `< 1.0`, missed hardware faults
+      report clean execution QC flags, and uncatalogued ghost precursors are omitted from the
+      NNLS precursor reference basis so `deconvolve_spectrum` genuinely mistakes overlapping
+      precursor peaks for the target phase.
+    - `false_alarm_rate` in `[0, 1]` injects spurious execution sensor alarms on physically clean
+      runs, triggering extra hardware retries.
+    """
+    if not math.isfinite(fault_flag_recall) or not (0.0 <= fault_flag_recall <= 1.0):
+        raise ValueError(f"fault_flag_recall must be in [0, 1], got {fault_flag_recall}")
+    if not math.isfinite(false_alarm_rate) or not (0.0 <= false_alarm_rate <= 1.0):
+        raise ValueError(f"false_alarm_rate must be in [0, 1], got {false_alarm_rate}")
+
     rng = _deterministic_rng("WETLAB", seed, mol.compound_id, attempt)
+    sensor_rng = _deterministic_rng("SENSOR_MODEL", seed, mol.compound_id, attempt)
 
     primary_sigma = 0.13
     # Hardware fault rate: 22% on initial robotic execution, 3% on targeted hardware retry
@@ -393,18 +420,32 @@ def _simulate_wet_lab_execution(
         # Robotic cavitation / missed incubation / broken seal -> apparent insoluble precipitate
         corrupted_log_s = round(-8.65 + rng.gauss(0.0, 0.20), 4)
         fault_kind = rng.randint(0, 2)
+        fault_detected = sensor_rng.random() < fault_flag_recall
+        obs_fault = [
+            max(0.0, 0.35 * _PREC_CLEAN_SPECTRUM[i] + sensor_rng.gauss(0.0, 0.010))
+            for i in range(len(_SPECTRAL_GRID))
+        ]
+        deconv_fault = deconvolve_spectrum(
+            obs_fault,
+            [_PREC_CLEAN_SPECTRUM, _PREC_GHOST_SPECTRUM],
+            _TARGET_SPECTRUM,
+            min_hit_amplitude=0.25,
+            noise_sigma=0.04,
+            use_numpy=False,
+        )
         telemetry = AssayTelemetry(
-            dispense_error_permille=165 if fault_kind == 0 else 18,
-            aspiration_clean=(fault_kind != 0),
-            incubation_window_clean=(fault_kind != 1),
-            seal_intact=(fault_kind != 2),
+            dispense_error_permille=(165 if fault_kind == 0 else 18) if fault_detected else 18,
+            aspiration_clean=(fault_kind != 0) if fault_detected else True,
+            incubation_window_clean=(fault_kind != 1) if fault_detected else True,
+            seal_intact=(fault_kind != 2) if fault_detected else True,
             positive_control_passed=True,
             blank_uncontaminated=True,
             detector_calibrated=True,
-            precursor_overlap_permille=15,
-            spectral_residual_permille=35,
-            snr_tenths=55,
+            precursor_overlap_permille=deconv_fault.precursor_overlap_permille,
+            spectral_residual_permille=deconv_fault.spectral_residual_permille,
+            snr_tenths=deconv_fault.snr_tenths,
             target_signal_present=False,
+            fit_method=SpectralFitMethod.STICK_NNLS,
         )
         return SimulatedWetLabRun(
             raw_measured_log_s=corrupted_log_s,
@@ -427,9 +468,16 @@ def _simulate_wet_lab_execution(
             )
             for i in range(len(_SPECTRAL_GRID))
         ]
+        ghost_catalogued = sensor_rng.random() < fault_flag_recall
+        spurious_alarm = sensor_rng.random() < false_alarm_rate
+        prec_basis = (
+            [_PREC_CLEAN_SPECTRUM, _PREC_GHOST_SPECTRUM]
+            if ghost_catalogued
+            else [_PREC_CLEAN_SPECTRUM]
+        )
         deconv = deconvolve_spectrum(
             obs_spec,
-            [_PREC_CLEAN_SPECTRUM, _PREC_GHOST_SPECTRUM],
+            prec_basis,
             _TARGET_SPECTRUM,
             min_hit_amplitude=0.25,
             noise_sigma=0.04,
@@ -439,16 +487,19 @@ def _simulate_wet_lab_execution(
         apparent_ghost_log_s = round(-1.85 + rng.gauss(0.0, 0.18), 4)
         telemetry = AssayTelemetry(
             dispense_error_permille=14,
-            aspiration_clean=True,
+            aspiration_clean=not spurious_alarm,
             incubation_window_clean=True,
             seal_intact=True,
             positive_control_passed=True,
             blank_uncontaminated=True,
             detector_calibrated=True,
-            precursor_overlap_permille=max(420, deconv.precursor_overlap_permille),
+            precursor_overlap_permille=deconv.precursor_overlap_permille,
             spectral_residual_permille=deconv.spectral_residual_permille,
-            snr_tenths=max(45, deconv.snr_tenths),
-            target_signal_present=(apparent_ghost_log_s >= HIT_MIN_LOG_SOLUBILITY),
+            snr_tenths=deconv.snr_tenths,
+            target_signal_present=(
+                deconv.target_signal_present or apparent_ghost_log_s >= HIT_MIN_LOG_SOLUBILITY
+            ),
+            fit_method=SpectralFitMethod.STICK_NNLS,
         )
         return SimulatedWetLabRun(
             raw_measured_log_s=apparent_ghost_log_s,
@@ -457,7 +508,7 @@ def _simulate_wet_lab_execution(
             true_has_ghost_peak=True,
         )
 
-    # Clean spectrum without overlapping ghost precursor
+    # Clean spectrum without overlapping ghost precursor (zero clamps!)
     clean_log_s = round(mol.true_log_s + rng.gauss(0.0, primary_sigma), 4)
     clean_prec_c = 0.35
     target_c = max(0.0, (clean_log_s - (-4.2)) * 0.45)
@@ -470,6 +521,7 @@ def _simulate_wet_lab_execution(
         )
         for i in range(len(_SPECTRAL_GRID))
     ]
+    spurious_alarm = sensor_rng.random() < false_alarm_rate
     deconv = deconvolve_spectrum(
         obs_spec,
         [_PREC_CLEAN_SPECTRUM, _PREC_GHOST_SPECTRUM],
@@ -482,22 +534,23 @@ def _simulate_wet_lab_execution(
         decision_snr = abs(clean_log_s - HIT_MIN_LOG_SOLUBILITY) / primary_sigma
         snr_tenths = int(round(10.0 * decision_snr))
     else:
-        snr_tenths = max(45, deconv.snr_tenths)
+        snr_tenths = deconv.snr_tenths
 
     telemetry = AssayTelemetry(
         dispense_error_permille=12,
-        aspiration_clean=True,
+        aspiration_clean=not spurious_alarm,
         incubation_window_clean=True,
         seal_intact=True,
         positive_control_passed=True,
         blank_uncontaminated=True,
         detector_calibrated=True,
-        precursor_overlap_permille=min(60, deconv.precursor_overlap_permille),
-        spectral_residual_permille=min(65, deconv.spectral_residual_permille),
+        precursor_overlap_permille=deconv.precursor_overlap_permille,
+        spectral_residual_permille=deconv.spectral_residual_permille,
         snr_tenths=snr_tenths,
         target_signal_present=(
             mol.rings >= HIT_MIN_RINGS and clean_log_s >= HIT_MIN_LOG_SOLUBILITY
         ),
+        fit_method=SpectralFitMethod.STICK_NNLS,
     )
     return SimulatedWetLabRun(
         raw_measured_log_s=clean_log_s,
@@ -544,8 +597,17 @@ def _run_single_seed_regime(
     batch_size: int,
     eta_permille: int = 350,
     alpha: float = 0.10,
+    fault_flag_recall: float = 1.0,
+    false_alarm_rate: float = 0.0,
 ) -> dict[str, Any]:
     """Execute one closed-loop campaign seed for a single experimental regime."""
+    if regime not in REGIME_NAMES:
+        raise ValueError(f"Unknown regime {regime!r}; expected one of {REGIME_NAMES}")
+
+    is_gated_regime = regime in ("lab_attrib_full_closed_loop", "lab_attrib_equal_budget")
+    is_equal_budget = regime == "lab_attrib_equal_budget"
+    max_total_measurements = n_rounds * batch_size
+
     means, stds = _standardize_fit([m.features for m in seed_train])
     z_seed_train = [_standardize_apply(m.features, means, stds) for m in seed_train]
     z_seed_cal = [_standardize_apply(m.features, means, stds) for m in seed_cal]
@@ -582,7 +644,7 @@ def _run_single_seed_regime(
 
     # Precompute top-3 nearest squared distances to z_seed_train for O(1) per-round kNN updates
     cand_top3_sq: dict[str, list[float]] = {}
-    if regime == "lab_attrib_full_closed_loop":
+    if is_gated_regime:
         for cid, zv in cand_z.items():
             sq_list = [sum((zv[j] - ref[j]) ** 2 for j in range(len(zv))) for ref in z_seed_train]
             cand_top3_sq[cid] = sorted(heapq.nsmallest(min(3, len(sq_list)), sq_list))
@@ -616,17 +678,36 @@ def _run_single_seed_regime(
 
     committed_hits: list[MoleculeCandidate] = []
     poisoned_memory_entries = 0
+    primary_assays_executed = 0
     robot_retries_triggered = 0
     orthogonal_assays_triggered = 0
+    total_measurements_used = 0
     certified_negatives_committed = 0
     certified_positives_committed = 0
     stepping_stone_expansions = 0
 
+    round_mae_curve: list[float] = []
+    round_poison_curve: list[int] = []
+    round_hits_curve: list[int] = []
+
     eta_scale = 1.0 + (eta_permille / 1000.0)
 
     for round_idx in range(n_rounds):
-        if not remaining:
+        budget_exhausted = is_equal_budget and (total_measurements_used >= max_total_measurements)
+        if not remaining or budget_exhausted:
+            # Pad remaining round trajectory slots with stationary post-budget state
+            cur_w = _fit_ridge_linear_system(mem_z, mem_y)
+            cur_mae = sum(
+                abs(frontier_eval_set[i].true_log_s - _predict_ridge(cur_w, eval_z[i]))
+                for i in range(len(frontier_eval_set))
+            ) / max(1, len(frontier_eval_set))
+            cur_true_hits = sum(1 for m in committed_hits if m.is_true_frontier_hit)
+            while len(round_mae_curve) < n_rounds:
+                round_mae_curve.append(cur_mae)
+                round_poison_curve.append(poisoned_memory_entries)
+                round_hits_curve.append(cur_true_hits)
             break
+
         weights = _fit_ridge_linear_system(mem_z, mem_y)
         round_tau_permille = tau_permille
 
@@ -700,7 +781,7 @@ def _run_single_seed_regime(
                     batch.append(m)
                     chosen_ids.add(m.compound_id)
         else:
-            # Regime 4 (`lab_attrib_full_closed_loop`):
+            # Gated regimes (`lab_attrib_full_closed_loop` & `lab_attrib_equal_budget`):
             # 1. Exploitation requires BOTH global shell bound AND local Chem-RRT kNN support!
             in_domain = [
                 m
@@ -764,23 +845,39 @@ def _run_single_seed_regime(
                     chosen_ids.add(m.compound_id)
 
         if not batch:
+            cur_w = _fit_ridge_linear_system(mem_z, mem_y)
+            cur_mae = sum(
+                abs(frontier_eval_set[i].true_log_s - _predict_ridge(cur_w, eval_z[i]))
+                for i in range(len(frontier_eval_set))
+            ) / max(1, len(frontier_eval_set))
+            cur_true_hits = sum(1 for m in committed_hits if m.is_true_frontier_hit)
+            while len(round_mae_curve) < n_rounds:
+                round_mae_curve.append(cur_mae)
+                round_poison_curve.append(poisoned_memory_entries)
+                round_hits_curve.append(cur_true_hits)
             break
 
         new_round_support: list[tuple[float, ...]] = []
         approved_round_taus: list[int] = []
 
         for mol in batch:
+            if is_equal_budget and total_measurements_used >= max_total_measurements:
+                break
             remaining.pop(mol.compound_id, None)
             d_perm = cand_dist_permille[mol.compound_id]
             z_vec = cand_z[mol.compound_id]
 
-            run = _simulate_wet_lab_execution(mol, seed=seed, attempt=0)
+            primary_assays_executed += 1
+            total_measurements_used += 1
+            run = _simulate_wet_lab_execution(
+                mol,
+                seed=seed,
+                attempt=0,
+                fault_flag_recall=fault_flag_recall,
+                false_alarm_rate=false_alarm_rate,
+            )
 
-            if regime in (
-                "naive_raw_writeback",
-                "pre_gate_only_static",
-                "unattributed_frontier_probes",
-            ):
+            if not is_gated_regime:
                 mem_z.append(z_vec)
                 mem_y.append(run.raw_measured_log_s)
                 if run.true_is_corrupted or run.true_has_ghost_peak:
@@ -800,25 +897,32 @@ def _run_single_seed_regime(
                         stepping_stone_expansions += 1
                 continue
 
-            # Regime 4: `lab_attrib_full_closed_loop`
+            # Gated regimes (`lab_attrib_full_closed_loop` & `lab_attrib_equal_budget`)
             diag_report = diagnose_assay(run.telemetry)
             primary_outcome = diag_report.outcome
             orth_readout: OrthogonalAssayReadout | None = None
             final_measured_log_s = run.raw_measured_log_s
 
             if primary_outcome is AttributionOutcome.EXECUTION_ARTIFACT:
-                # Inspect compound faults (`RECALIBRATE_DETECTOR` before `RETRY_ROBOT`)
-                robot_retries_triggered += 1
-                run = _simulate_wet_lab_execution(mol, seed=seed, attempt=1)
-                if not run.telemetry.detector_calibrated:
-                    run = SimulatedWetLabRun(
-                        raw_measured_log_s=run.raw_measured_log_s,
-                        telemetry=replace(run.telemetry, detector_calibrated=True),
-                        true_is_corrupted=run.true_is_corrupted,
-                        true_has_ghost_peak=run.true_has_ghost_peak,
+                if (not is_equal_budget) or (total_measurements_used < max_total_measurements):
+                    robot_retries_triggered += 1
+                    total_measurements_used += 1
+                    run = _simulate_wet_lab_execution(
+                        mol,
+                        seed=seed,
+                        attempt=1,
+                        fault_flag_recall=fault_flag_recall,
+                        false_alarm_rate=false_alarm_rate,
                     )
-                primary_outcome = attribute_assay_outcome(run.telemetry)
-                final_measured_log_s = run.raw_measured_log_s
+                    if not run.telemetry.detector_calibrated:
+                        run = SimulatedWetLabRun(
+                            raw_measured_log_s=run.raw_measured_log_s,
+                            telemetry=replace(run.telemetry, detector_calibrated=True),
+                            true_is_corrupted=run.true_is_corrupted,
+                            true_has_ghost_peak=run.true_has_ghost_peak,
+                        )
+                    primary_outcome = attribute_assay_outcome(run.telemetry)
+                    final_measured_log_s = run.raw_measured_log_s
 
             if primary_outcome is AttributionOutcome.AMBIGUOUS_CHARACTERIZATION:
                 decision = route_orthogonal_assay(
@@ -827,8 +931,13 @@ def _run_single_seed_regime(
                     available_volume_ul=8.0,
                     sample_phase="solution",
                 )
-                if not decision.discard_sample and decision.selected_modality is not None:
+                if (
+                    not decision.discard_sample
+                    and decision.selected_modality is not None
+                    and ((not is_equal_budget) or (total_measurements_used < max_total_measurements))
+                ):
                     orthogonal_assays_triggered += 1
+                    total_measurements_used += 1
                     final_measured_log_s, orth_readout = _simulate_orthogonal_lcms(
                         mol,
                         decision.selected_modality,
@@ -838,6 +947,10 @@ def _run_single_seed_regime(
             final_outcome = effective_attribution(run.telemetry, orth_readout)
             if not admit_to_scientific_memory(final_outcome):
                 continue
+
+            # Ground-truth poisoned-memory accounting across ALL regimes (including gated!)
+            if run.true_is_corrupted or (run.true_has_ghost_peak and orth_readout is None):
+                poisoned_memory_entries += 1
 
             ledger.append(
                 sample_id=mol.compound_id,
@@ -886,7 +999,7 @@ def _run_single_seed_regime(
                     approved_round_taus.append(d_perm)
 
         # Synchronized end-of-plate-round frontier commit (order-independent within batch!)
-        if regime == "lab_attrib_full_closed_loop":
+        if is_gated_regime:
             if new_round_support:
                 certified_support.extend(new_round_support)
                 for cid in remaining:
@@ -906,11 +1019,21 @@ def _run_single_seed_regime(
                     tau_permille = best_new_tau
                     stepping_stone_expansions += 1
 
+        # End-of-round held-out surrogate MAE & cumulative trajectory snapshot
+        post_round_w = _fit_ridge_linear_system(mem_z, mem_y)
+        post_round_mae = sum(
+            abs(frontier_eval_set[i].true_log_s - _predict_ridge(post_round_w, eval_z[i]))
+            for i in range(len(frontier_eval_set))
+        ) / max(1, len(frontier_eval_set))
+        round_mae_curve.append(post_round_mae)
+        round_poison_curve.append(poisoned_memory_entries)
+        round_hits_curve.append(sum(1 for m in committed_hits if m.is_true_frontier_hit))
+
     # Final post-campaign evaluation on clean held-out frontier molecules
     final_weights = _fit_ridge_linear_system(mem_z, mem_y)
     claimed_tau_permille = tau_permille
 
-    if regime == "lab_attrib_full_closed_loop":
+    if is_gated_regime:
         eff_alpha = min(alpha, alpha_t)
         frontier_cal_scores = [
             abs(y_c - _predict_ridge(final_weights, z_c))
@@ -926,9 +1049,6 @@ def _run_single_seed_regime(
                 _conformal_quantile(frontier_cal_scores, alpha=eff_alpha),
             )
         else:
-            # Conservative finite-sample guard on short-budget campaigns (`n_cal < 15`):
-            # restrict claimed outer shell proportionally to certified calibration support
-            # and inflate `q_hat` via finite-sample level adjustment + radial Lipschitz margin.
             cal_frac = len(frontier_cal_scores) / float(MIN_FRONTIER_CALIBRATION_SAMPLES)
             claimed_tau_permille = int(
                 round(initial_tau_permille + cal_frac * (tau_permille - initial_tau_permille))
@@ -946,7 +1066,7 @@ def _run_single_seed_regime(
 
     if regime == "naive_raw_writeback":
         eval_indices = list(range(len(frontier_eval_set)))
-    elif regime == "lab_attrib_full_closed_loop":
+    elif is_gated_regime:
         eval_indices = [
             i
             for i, d_val in enumerate(eval_dist)
@@ -980,11 +1100,12 @@ def _run_single_seed_regime(
         if abs(mol_e.true_log_s - pred) <= q_hat:
             covered += 1
 
-    all_sq_errors = [
-        (frontier_eval_set[i].true_log_s - _predict_ridge(final_weights, eval_z[i])) ** 2
+    abs_errors = [
+        abs(frontier_eval_set[i].true_log_s - _predict_ridge(final_weights, eval_z[i]))
         for i in range(len(frontier_eval_set))
     ]
-    frontier_rmse = math.sqrt(sum(all_sq_errors) / max(1, len(all_sq_errors)))
+    frontier_mae = sum(abs_errors) / max(1, len(abs_errors))
+    frontier_rmse = math.sqrt(sum(e * e for e in abs_errors) / max(1, len(abs_errors)))
     conformal_coverage = covered / max(1, len(eval_indices))
 
     true_hits = sum(1 for m in committed_hits if m.is_true_frontier_hit)
@@ -1001,36 +1122,121 @@ def _run_single_seed_regime(
         "false_discovery_rate": fdr,
         "poisoned_memory_entries": poisoned_memory_entries,
         "conformal_coverage_90": conformal_coverage,
+        "frontier_surrogate_mae": frontier_mae,
         "frontier_surrogate_rmse": frontier_rmse,
         "initial_tau": initial_tau_permille / 1000.0,
         "final_tau": tau_permille / 1000.0,
         "stepping_stone_expansions": stepping_stone_expansions,
+        "primary_assays_executed": primary_assays_executed,
         "robot_retries_triggered": robot_retries_triggered,
         "orthogonal_assays_triggered": orthogonal_assays_triggered,
+        "total_measurements_used": total_measurements_used,
         "certified_ledger_size": len(ledger),
         "certified_negatives": certified_negatives_committed,
         "certified_positives": certified_positives_committed,
         "frontier_calibration_size": len(frontier_cal_z),
         "aci_alpha_final": round(alpha_t, 4),
         "ledger_chain_valid": ledger_ok,
+        "round_mae_curve": round_mae_curve,
+        "round_poison_curve": round_poison_curve,
+        "round_hits_curve": round_hits_curve,
+    }
+
+
+def _summarize_regime_runs(runs: Sequence[dict[str, Any]], n_rounds: int) -> dict[str, Any]:
+    n_s = float(max(1, len(runs)))
+    round_mae_mean = [
+        round(sum(float(r["round_mae_curve"][k]) for r in runs) / n_s, 4)
+        for k in range(n_rounds)
+    ]
+    round_poison_mean = [
+        round(sum(float(r["round_poison_curve"][k]) for r in runs) / n_s, 2)
+        for k in range(n_rounds)
+    ]
+    round_hits_mean = [
+        round(sum(float(r["round_hits_curve"][k]) for r in runs) / n_s, 2)
+        for k in range(n_rounds)
+    ]
+    return {
+        "mean_verified_multi_ring_hits": round(
+            sum(r["verified_multi_ring_hits"] for r in runs) / n_s, 2
+        ),
+        "mean_false_positive_hits": round(
+            sum(r["false_positive_hits"] for r in runs) / n_s, 2
+        ),
+        "false_discovery_rate_pct": round(
+            100.0 * sum(r["false_discovery_rate"] for r in runs) / n_s, 2
+        ),
+        "mean_poisoned_memory_entries": round(
+            sum(r["poisoned_memory_entries"] for r in runs) / n_s, 2
+        ),
+        "conformal_coverage_pct": round(
+            100.0 * sum(r["conformal_coverage_90"] for r in runs) / n_s, 2
+        ),
+        "mean_frontier_mae": round(
+            sum(r["frontier_surrogate_mae"] for r in runs) / n_s, 4
+        ),
+        "mean_frontier_rmse": round(
+            sum(r["frontier_surrogate_rmse"] for r in runs) / n_s, 4
+        ),
+        "mean_initial_tau": round(sum(r["initial_tau"] for r in runs) / n_s, 3),
+        "mean_final_tau": round(sum(r["final_tau"] for r in runs) / n_s, 3),
+        "mean_stepping_stone_expansions": round(
+            sum(r["stepping_stone_expansions"] for r in runs) / n_s, 2
+        ),
+        "mean_primary_assays": round(
+            sum(r["primary_assays_executed"] for r in runs) / n_s, 2
+        ),
+        "mean_robot_retries": round(
+            sum(r["robot_retries_triggered"] for r in runs) / n_s, 2
+        ),
+        "mean_orthogonal_assays": round(
+            sum(r["orthogonal_assays_triggered"] for r in runs) / n_s, 2
+        ),
+        "mean_total_measurements": round(
+            sum(r["total_measurements_used"] for r in runs) / n_s, 2
+        ),
+        "mean_certified_ledger_entries": round(
+            sum(r["certified_ledger_size"] for r in runs) / n_s, 2
+        ),
+        "all_ledger_chains_valid": all(r["ledger_chain_valid"] for r in runs),
+        "round_trajectories": {
+            "rounds": list(range(1, n_rounds + 1)),
+            "mean_frontier_mae": round_mae_mean,
+            "mean_cumulative_poisoned_entries": round_poison_mean,
+            "mean_cumulative_verified_hits": round_hits_mean,
+        },
     }
 
 
 def run_attributed_frontier_benchmark(
     *,
     csv_path: str | Path | None = None,
+    force_synthetic_fallback: bool = False,
     seeds: Sequence[int] = (11, 23, 37, 53, 71),
     n_rounds: int = 9,
     batch_size: int = 20,
     eta_permille: int = 420,
+    fault_flag_recall: float = 1.0,
+    false_alarm_rate: float = 0.0,
+    recall_sweep: Sequence[float] = (1.0, 0.9, 0.8),
 ) -> dict[str, Any]:
-    """Run the 4-regime closed-loop attributed frontier benchmark across multiple seeds."""
-    molecules, dataset_label = resolve_molecule_pool(csv_path)
+    """Run the 5-regime closed-loop attributed frontier benchmark + sensor-recall sweep."""
+    molecules, dataset_label = resolve_molecule_pool(
+        csv_path, force_synthetic_fallback=force_synthetic_fallback
+    )
     seed_domain_all = [m for m in molecules if m.rings <= 2 and m.features[1] <= 220.0]
     frontier_all = [m for m in molecules if not (m.rings <= 2 and m.features[1] <= 220.0)]
 
-    per_regime_runs: dict[str, list[dict[str, Any]]] = {r: [] for r in REGIME_NAMES}
-
+    seed_splits: list[
+        tuple[
+            int,
+            list[MoleculeCandidate],
+            list[MoleculeCandidate],
+            list[MoleculeCandidate],
+            list[MoleculeCandidate],
+        ]
+    ] = []
     for seed in seeds:
         rng = random.Random(seed * 9973)
         seed_shuffled = list(seed_domain_all)
@@ -1045,7 +1251,10 @@ def run_attributed_frontier_benchmark(
         n_eval = max(50, min(100, len(frontier_shuffled) // 4))
         frontier_eval = frontier_shuffled[:n_eval]
         exploration_pool = frontier_shuffled[n_eval:]
+        seed_splits.append((seed, seed_train, seed_cal, exploration_pool, frontier_eval))
 
+    per_regime_runs: dict[str, list[dict[str, Any]]] = {r: [] for r in REGIME_NAMES}
+    for seed, seed_train, seed_cal, exploration_pool, frontier_eval in seed_splits:
         for regime in REGIME_NAMES:
             metrics = _run_single_seed_regime(
                 regime,
@@ -1057,47 +1266,79 @@ def run_attributed_frontier_benchmark(
                 n_rounds=n_rounds,
                 batch_size=batch_size,
                 eta_permille=eta_permille,
+                fault_flag_recall=fault_flag_recall,
+                false_alarm_rate=false_alarm_rate,
             )
             per_regime_runs[regime].append(metrics)
 
-    summary_by_regime: dict[str, dict[str, Any]] = {}
-    n_s = float(len(seeds))
-    for regime, runs in per_regime_runs.items():
-        summary_by_regime[regime] = {
-            "mean_verified_multi_ring_hits": round(
-                sum(r["verified_multi_ring_hits"] for r in runs) / n_s, 2
-            ),
-            "mean_false_positive_hits": round(
-                sum(r["false_positive_hits"] for r in runs) / n_s, 2
-            ),
-            "false_discovery_rate_pct": round(
-                100.0 * sum(r["false_discovery_rate"] for r in runs) / n_s, 2
-            ),
-            "mean_poisoned_memory_entries": round(
-                sum(r["poisoned_memory_entries"] for r in runs) / n_s, 2
-            ),
-            "conformal_coverage_pct": round(
-                100.0 * sum(r["conformal_coverage_90"] for r in runs) / n_s, 2
-            ),
-            "mean_frontier_rmse": round(
-                sum(r["frontier_surrogate_rmse"] for r in runs) / n_s, 4
-            ),
-            "mean_initial_tau": round(sum(r["initial_tau"] for r in runs) / n_s, 3),
-            "mean_final_tau": round(sum(r["final_tau"] for r in runs) / n_s, 3),
-            "mean_stepping_stone_expansions": round(
-                sum(r["stepping_stone_expansions"] for r in runs) / n_s, 2
-            ),
-            "mean_robot_retries": round(
-                sum(r["robot_retries_triggered"] for r in runs) / n_s, 2
-            ),
-            "mean_orthogonal_assays": round(
-                sum(r["orthogonal_assays_triggered"] for r in runs) / n_s, 2
-            ),
-            "mean_certified_ledger_entries": round(
-                sum(r["certified_ledger_size"] for r in runs) / n_s, 2
-            ),
-            "all_ledger_chains_valid": all(r["ledger_chain_valid"] for r in runs),
-        }
+    summary_by_regime: dict[str, dict[str, Any]] = {
+        regime: _summarize_regime_runs(runs, n_rounds=n_rounds)
+        for regime, runs in per_regime_runs.items()
+    }
+
+    sweep_entries: list[dict[str, Any]] = []
+    for rec_level in recall_sweep:
+        rec_val = float(rec_level)
+        if abs(rec_val - fault_flag_recall) < 1e-12:
+            full_sum = summary_by_regime["lab_attrib_full_closed_loop"]
+            eq_sum = summary_by_regime["lab_attrib_equal_budget"]
+        else:
+            full_runs = [
+                _run_single_seed_regime(
+                    "lab_attrib_full_closed_loop",
+                    st,
+                    sc,
+                    ep,
+                    fe,
+                    seed=sd,
+                    n_rounds=n_rounds,
+                    batch_size=batch_size,
+                    eta_permille=eta_permille,
+                    fault_flag_recall=rec_val,
+                    false_alarm_rate=false_alarm_rate,
+                )
+                for sd, st, sc, ep, fe in seed_splits
+            ]
+            eq_runs = [
+                _run_single_seed_regime(
+                    "lab_attrib_equal_budget",
+                    st,
+                    sc,
+                    ep,
+                    fe,
+                    seed=sd,
+                    n_rounds=n_rounds,
+                    batch_size=batch_size,
+                    eta_permille=eta_permille,
+                    fault_flag_recall=rec_val,
+                    false_alarm_rate=false_alarm_rate,
+                )
+                for sd, st, sc, ep, fe in seed_splits
+            ]
+            full_sum = _summarize_regime_runs(full_runs, n_rounds=n_rounds)
+            eq_sum = _summarize_regime_runs(eq_runs, n_rounds=n_rounds)
+
+        def _compact_sweep_metrics(s: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "mean_verified_multi_ring_hits": s["mean_verified_multi_ring_hits"],
+                "mean_false_positive_hits": s["mean_false_positive_hits"],
+                "false_discovery_rate_pct": s["false_discovery_rate_pct"],
+                "mean_poisoned_memory_entries": s["mean_poisoned_memory_entries"],
+                "conformal_coverage_pct": s["conformal_coverage_pct"],
+                "mean_frontier_mae": s["mean_frontier_mae"],
+                "mean_frontier_rmse": s["mean_frontier_rmse"],
+                "mean_total_measurements": s["mean_total_measurements"],
+                "mean_certified_ledger_entries": s["mean_certified_ledger_entries"],
+            }
+
+        sweep_entries.append(
+            {
+                "fault_flag_recall": round(rec_val, 4),
+                "false_alarm_rate": round(false_alarm_rate, 4),
+                "lab_attrib_full_closed_loop": _compact_sweep_metrics(full_sum),
+                "lab_attrib_equal_budget": _compact_sweep_metrics(eq_sum),
+            }
+        )
 
     return {
         "benchmark": "lab_attrib_attributed_chem_rrt_frontier",
@@ -1106,9 +1347,13 @@ def run_attributed_frontier_benchmark(
         "seeds": list(seeds),
         "n_rounds": n_rounds,
         "batch_size": batch_size,
+        "primary_budget_assays": n_rounds * batch_size,
+        "fault_flag_recall": round(fault_flag_recall, 4),
+        "false_alarm_rate": round(false_alarm_rate, 4),
         "nominal_conformal_target_pct": 90.0,
         "hit_definition": (
             f"rings >= {HIT_MIN_RINGS} and true_log_solubility >= {HIT_MIN_LOG_SOLUBILITY}"
         ),
         "regimes": summary_by_regime,
+        "sensor_recall_sweep": sweep_entries,
     }

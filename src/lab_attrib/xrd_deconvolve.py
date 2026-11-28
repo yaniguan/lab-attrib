@@ -24,7 +24,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from lab_attrib.blame import AssayTelemetry
+from lab_attrib.blame import AssayTelemetry, SpectralFitMethod
 
 try:
     import numpy as _np  # type: ignore[import-not-found]
@@ -95,9 +95,15 @@ class DeconvolutionResult:
         positive_control_passed: bool = True,
         blank_uncontaminated: bool = True,
         detector_calibrated: bool = True,
+        fit_method: SpectralFitMethod | str = SpectralFitMethod.STICK_NNLS,
     ) -> AssayTelemetry:
         """Lift deconvolved analytical metrics + wet-lab QC into `AssayTelemetry`."""
         effective_snr = self.snr_tenths if self.converged else 0
+        resolved_fit = (
+            fit_method
+            if isinstance(fit_method, SpectralFitMethod)
+            else SpectralFitMethod(str(fit_method))
+        )
         return AssayTelemetry(
             dispense_error_permille=dispense_error_permille,
             aspiration_clean=aspiration_clean,
@@ -110,6 +116,7 @@ class DeconvolutionResult:
             spectral_residual_permille=self.spectral_residual_permille,
             snr_tenths=effective_snr,
             target_signal_present=self.target_signal_present,
+            fit_method=resolved_fit,
         )
 
 

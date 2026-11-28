@@ -227,12 +227,34 @@ def _default_benchmark_output_path() -> Path:
 def _cmd_benchmark(args: argparse.Namespace) -> int:
     results = run_attributed_frontier_benchmark(
         csv_path=args.csv,
+        force_synthetic_fallback=bool(args.synthetic_fallback),
         n_rounds=args.rounds,
         batch_size=args.batch_size,
+        fault_flag_recall=args.fault_recall,
+        false_alarm_rate=args.false_alarm_rate,
     )
+    formatted = json.dumps(results, indent=2) + "\n"
+
+    if args.check_drift is not None:
+        ref_path = Path(args.check_drift)
+        if not ref_path.is_file():
+            print(f"Drift check failed: missing reference file {ref_path}", file=sys.stderr)
+            return 2
+        expected = json.loads(ref_path.read_text(encoding="utf-8"))
+        if results != expected:
+            print(
+                f"Drift check failed: live benchmark output differs from {ref_path}",
+                file=sys.stderr,
+            )
+            return 2
+        if not args.json:
+            print(f"Zero-drift benchmark verification passed against: {ref_path}")
+        else:
+            print(formatted, end="")
+        return 0
+
     out_path = Path(args.output) if args.output else _default_benchmark_output_path()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    formatted = json.dumps(results, indent=2) + "\n"
     out_path.write_text(formatted, encoding="utf-8")
 
     if args.json:
@@ -244,6 +266,7 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
                 f"  {regime:28s} | hits={stats['mean_verified_multi_ring_hits']:5.2f} "
                 f"| FDR={stats['false_discovery_rate_pct']:5.2f}% "
                 f"| poisoned={stats['mean_poisoned_memory_entries']:5.2f} "
+                f"| assays={stats['mean_total_measurements']:6.2f} "
                 f"| cov90={stats['conformal_coverage_pct']:5.2f}%"
             )
     return 0
@@ -330,11 +353,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_bench = sub.add_parser(
         "benchmark",
-        help="Run the 4-regime closed-loop attributed Chem-RRT frontier campaign",
+        help="Run the 5-regime closed-loop attributed Chem-RRT frontier campaign",
     )
     p_bench.add_argument("--csv", default=None, help="Optional path to Delaney ESOL or AqSolDB CSV/TSV")
+    p_bench.add_argument(
+        "--synthetic-fallback",
+        action="store_true",
+        help="Force deterministic 720-molecule synthetic ESOL fallback pool (ignores local CSV)",
+    )
     p_bench.add_argument("--rounds", type=int, default=9, help="Campaign rounds per seed")
     p_bench.add_argument("--batch-size", type=int, default=20, help="Assays per round")
+    p_bench.add_argument(
+        "--fault-recall",
+        type=float,
+        default=1.0,
+        help="Execution/library fault sensor recall in [0, 1] (default: 1.0)",
+    )
+    p_bench.add_argument(
+        "--false-alarm-rate",
+        type=float,
+        default=0.0,
+        help="Spurious execution sensor false-alarm rate in [0, 1] (default: 0.0)",
+    )
+    p_bench.add_argument(
+        "--check-drift",
+        default=None,
+        help="Verify zero JSON drift against a committed benchmark JSON path (exit 2 on mismatch)",
+    )
     p_bench.add_argument("--output", default=None, help="Output JSON path")
     p_bench.add_argument("--json", action="store_true", help="Emit benchmark JSON to stdout")
     p_bench.set_defaults(func=_cmd_benchmark)

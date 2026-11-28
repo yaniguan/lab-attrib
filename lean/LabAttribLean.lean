@@ -36,8 +36,23 @@ def maxDispenseErrorPermille : Nat := 50
 /-- Maximum tolerated precursor peak-overlap fraction on target channels in permille (150 = 15.0%). -/
 def maxPrecursorOverlapPermille : Nat := 150
 
-/-- Maximum tolerated weighted profile residual R_wp in permille (100 = 10.0%). -/
+/-- Maximum tolerated Rietveld full-profile weighted residual R_wp in permille (100 = 10.0%). -/
 def maxSpectralResidualPermille : Nat := 100
+
+/-- Maximum tolerated 1D stick-pattern / isotropic-CIF NNLS residual R_wp in permille (200 = 20.0%). -/
+def maxStickNnlsResidualPermille : Nat := 200
+
+/-- Spectral profile fitting method governing the calibrated R_wp residual threshold. -/
+inductive SpectralFitMethod where
+  | rietveld  : SpectralFitMethod
+  | stickNnls : SpectralFitMethod
+  deriving DecidableEq, Repr
+
+/-- Fit-method-calibrated R_wp residual threshold in permille (`100` Rietveld vs `200` stick-NNLS). -/
+def maxResidualForFitMethod (m : SpectralFitMethod) : Nat :=
+  match m with
+  | .rietveld  => maxSpectralResidualPermille
+  | .stickNnls => maxStickNnlsResidualPermille
 
 /-- Minimum resolvable assay detection-power signal-to-noise ratio in tenths (30 = SNR 3.0). -/
 def minResolvableSnrTenths : Nat := 30
@@ -75,6 +90,7 @@ structure AssayTelemetry where
   positiveControlRecoveryPermille : Nat := 1000
   plateZPrimeTenths               : Int := 70
   positiveControlZscoreTenths     : Int := 50
+  fitMethod                       : SpectralFitMethod := .rietveld
   deriving DecidableEq, Repr
 
 /-- Exhaustive 4-way causal attribution verdict after wet-lab execution. -/
@@ -105,11 +121,11 @@ def executionClean (t : AssayTelemetry) : Bool :=
   decide (minZPrimeTenths ≤ t.plateZPrimeTenths) &&
   decide (minPosControlZscoreTenths ≤ t.positiveControlZscoreTenths)
 
-/-- Analytical characterization predicate: calibrated detector, A-Lab precursor guard, R_wp, SNR. -/
+/-- Analytical characterization predicate: calibrated detector, A-Lab precursor guard, fit-method R_wp, SNR. -/
 def characterizationIdentifiable (t : AssayTelemetry) : Bool :=
   t.detectorCalibrated &&
   decide (t.precursorOverlapPermille ≤ maxPrecursorOverlapPermille) &&
-  decide (t.spectralResidualPermille ≤ maxSpectralResidualPermille) &&
+  decide (t.spectralResidualPermille ≤ maxResidualForFitMethod t.fitMethod) &&
   decide (minResolvableSnrTenths ≤ t.snrTenths)
 
 /-- Compound physical + analytical fault indicator (`dual_fault_detected`). -/
@@ -226,12 +242,12 @@ theorem dual_fault_quarantines_memory (t : AssayTelemetry)
   exact ⟨hExec, hIdent, by simp [attributeAssayOutcome, hExec],
     corrupted_run_never_poisons_memory t hExec⟩
 
-/-- Theorem 4: Formal A-Lab precursor-overlap & R_wp guard — unidentifiable spectra are never certified. -/
+/-- Theorem 4: Formal A-Lab precursor-overlap & fit-method R_wp guard — unidentifiable spectra are never certified. -/
 theorem unidentifiable_spectrum_never_certified (t : AssayTelemetry)
     (hAmb :
       t.detectorCalibrated = false ∨
       maxPrecursorOverlapPermille < t.precursorOverlapPermille ∨
-      maxSpectralResidualPermille < t.spectralResidualPermille ∨
+      maxResidualForFitMethod t.fitMethod < t.spectralResidualPermille ∨
       t.snrTenths < minResolvableSnrTenths) :
     attributeAssayOutcome t ≠ .certifiedPositive ∧
     attributeAssayOutcome t ≠ .certifiedNegative ∧
@@ -243,7 +259,7 @@ theorem unidentifiable_spectrum_never_certified (t : AssayTelemetry)
     · have hNotLe : ¬ (t.precursorOverlapPermille ≤ maxPrecursorOverlapPermille) :=
         Nat.not_le.mpr hPrec
       simp [hNotLe]
-    · have hNotLe : ¬ (t.spectralResidualPermille ≤ maxSpectralResidualPermille) :=
+    · have hNotLe : ¬ (t.spectralResidualPermille ≤ maxResidualForFitMethod t.fitMethod) :=
         Nat.not_le.mpr hRwp
       simp [hNotLe]
     · have hNotLe : ¬ (minResolvableSnrTenths ≤ t.snrTenths) :=
@@ -279,6 +295,30 @@ theorem admit_iff_exec_clean_and_identifiable (t : AssayTelemetry) :
   unfold attributeAssayOutcome admitToScientificMemory
   cases executionClean t <;> cases characterizationIdentifiable t <;> cases t.targetSignalPresent <;>
     simp
+
+/-- Fit-method R_wp calibration soundness: a clean stick-NNLS fit in `(100, 200]` permille is
+    quarantined under Rietveld thresholds while certified under calibrated stick-NNLS thresholds. -/
+theorem stick_nnls_calibrated_rwp_sound (t : AssayTelemetry)
+    (hExec : executionClean t = true)
+    (hDet : t.detectorCalibrated = true)
+    (hPrec : t.precursorOverlapPermille ≤ maxPrecursorOverlapPermille)
+    (hSnr : minResolvableSnrTenths ≤ t.snrTenths)
+    (hAboveRietveld : maxSpectralResidualPermille < t.spectralResidualPermille)
+    (hWithinStick : t.spectralResidualPermille ≤ maxStickNnlsResidualPermille) :
+    attributeAssayOutcome { t with fitMethod := .rietveld } = .ambiguousCharacterization ∧
+    admitToScientificMemory (attributeAssayOutcome { t with fitMethod := .stickNnls }) = true := by
+  have hExecR : executionClean { t with fitMethod := .rietveld } = true := hExec
+  have hExecS : executionClean { t with fitMethod := .stickNnls } = true := hExec
+  have hNotLeR : ¬ (t.spectralResidualPermille ≤ maxSpectralResidualPermille) :=
+    Nat.not_le.mpr hAboveRietveld
+  have hIdentR : characterizationIdentifiable { t with fitMethod := .rietveld } = false := by
+    simp [characterizationIdentifiable, maxResidualForFitMethod, hDet, hNotLeR]
+  have hIdentS : characterizationIdentifiable { t with fitMethod := .stickNnls } = true := by
+    simp [characterizationIdentifiable, maxResidualForFitMethod, hDet, hPrec, hWithinStick, hSnr]
+  constructor
+  · simp [attributeAssayOutcome, hExecR, hIdentR]
+  · rw [admit_iff_exec_clean_and_identifiable]
+    exact ⟨hExecS, hIdentS⟩
 
 /-- Theorem 8: Physical execution artifacts always route to robotic hardware retry. -/
 theorem execution_artifact_routes_to_hardware_retry (t : AssayTelemetry)
@@ -563,7 +603,13 @@ def encodeBoolLane (b : Bool) : Nat :=
 def hashStringCodepoints (acc : Nat) (s : String) : Nat :=
   s.toList.foldl (fun st c => mixHashLane st c.toNat) (mixHashLane acc s.length)
 
-/-- Fold all 14 `AssayTelemetry` fields into the rolling hash accumulator. -/
+/-- Encode `SpectralFitMethod` as distinct non-zero lane tag. -/
+def encodeFitMethodLane (m : SpectralFitMethod) : Nat :=
+  match m with
+  | .rietveld  => 1
+  | .stickNnls => 2
+
+/-- Fold all 15 `AssayTelemetry` fields (including `fitMethod`) into the rolling hash accumulator. -/
 def hashAssayTelemetry (acc : Nat) (t : AssayTelemetry) : Nat :=
   let s0  := mixHashLane acc t.dispenseErrorPermille
   let s1  := mixHashLane s0  (encodeBoolLane t.aspirationClean)
@@ -578,7 +624,8 @@ def hashAssayTelemetry (acc : Nat) (t : AssayTelemetry) : Nat :=
   let s10 := mixHashLane s9  (encodeBoolLane t.targetSignalPresent)
   let s11 := mixHashLane s10 t.positiveControlRecoveryPermille
   let s12 := mixHashLane s11 (encodeSignedInt t.plateZPrimeTenths)
-  mixHashLane s12 (encodeSignedInt t.positiveControlZscoreTenths)
+  let s13 := mixHashLane s12 (encodeSignedInt t.positiveControlZscoreTenths)
+  mixHashLane s13 (encodeFitMethodLane t.fitMethod)
 
 /-- Fold optional secondary `OrthogonalAssayReadout` into the rolling hash accumulator. -/
 def hashOrthogonalOpt (acc : Nat) (orth : Option OrthogonalAssayReadout) : Nat :=
@@ -935,5 +982,9 @@ theorem tampered_telemetry_breaks_entry_hash :
 -- Guard 16: Telemetry or same-length sampleId tampering changes abstract entry hash
 #guard computeAbstractEntryHash 0 "NEG-1" sampleCleanNegative none .certifiedNegative GenesisHash !=
        computeAbstractEntryHash 0 "FORGE" sampleCleanNegative none .certifiedNegative GenesisHash
+
+-- Guard 17: Stick-NNLS calibrated R_wp (140 permille) certifies clean hit while Rietveld (max 100) quarantines
+#guard attributeAssayOutcome { sampleCleanPositive with spectralResidualPermille := 140, fitMethod := .rietveld } == .ambiguousCharacterization &&
+       attributeAssayOutcome { sampleCleanPositive with spectralResidualPermille := 140, fitMethod := .stickNnls } == .certifiedPositive
 
 end LabAttribLean
